@@ -28,6 +28,10 @@ html {
   scroll-padding-bottom: calc(var(--nav-h) + 36px + env(safe-area-inset-bottom));
   -webkit-text-size-adjust: 100%;
 }
+/* El aviso de demostración es fijo arriba: tampoco debe tapar el destino. */
+html:has(.demo-banner) {
+  scroll-padding-top: 72px;
+}
 
 @media (prefers-reduced-motion: reduce) {
   html {
@@ -996,4 +1000,109 @@ a {
   font-size: 13px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
+}
+
+/* ---------- Confirmación por personas (BODA-003-R02) ---------- */
+.choice-check input {
+  border-radius: 6px;
+}
+.choice-check input::after {
+  width: 12px;
+  height: 7px;
+  border-radius: 0;
+  background: none;
+  border-left: 2px solid var(--ivory);
+  border-bottom: 2px solid var(--ivory);
+  transform: rotate(-45deg) scale(0);
+  margin-top: -3px;
+}
+.choice-check input:checked {
+  background: var(--olive);
+  border-color: var(--olive-light);
+}
+.choice-check input:checked::after {
+  transform: rotate(-45deg) scale(1);
+}
+.choice-check.is-off {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.choice-none {
+  border-style: dashed;
+}
+.non-transferable {
+  border-left: 2px solid var(--olive-light);
+  padding: 4px 0 4px 16px;
+  margin: 0 auto 22px;
+  max-width: 560px;
+  text-align: left;
+  color: var(--ivory-dim);
+  font-size: 15px;
+}
+.non-transferable p {
+  margin: 0;
+}
+.non-transferable .nt-title {
+  color: var(--ivory);
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+.review-title {
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--olive-light);
+  font-weight: 400;
+  margin: 0 0 10px;
+  outline: none;
+}
+.summary-line {
+  font-family: var(--serif);
+  font-size: 23px;
+  line-height: 1.3;
+  margin: 0 0 10px;
+}
+.name-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+  display: grid;
+  gap: 6px;
+}
+.name-list li {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(11, 12, 11, 0.45);
+}
+.saved .name-list {
+  max-width: 360px;
+  margin: 12px auto 14px;
+}
+.review-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 8px;
+}
+.conflict-line {
+  display: block;
+  margin-top: 8px;
+}
+.small {
+  font-size: 14px;
+}
+.demo-note {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: #ece3b3 !important;
+  margin: 0 0 4px !important;
+}
+.share-general {
+  text-align: center;
+}
+.share-general p {
+  max-width: 460px;
+  margin: 12px auto 0;
 }

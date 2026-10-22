@@ -30,13 +30,4 @@ export function buildInviteMessage(input: { name: string; seats: number | null; 
     .replace(/\n{3,}/g, '\n\n');
 }
 
-/** Normaliza un teléfono a dígitos E.164 sin "+". Asume México (52) si son 10 dígitos. */
-export function normalizePhone(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  let d = raw.replace(/\D/g, '');
-  if (!d) return null;
-  if (d.length === 10) d = '52' + d;
-  else if (d.length === 13 && d.startsWith('521')) d = '52' + d.slice(3); // formato antiguo de móvil
-  if (d.length < 11 || d.length > 15) return null;
-  return d;
-}
+export { normalizePhone } from './rsvp-rules.js';

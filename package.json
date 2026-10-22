@@ -9,11 +9,11 @@
   },
   "scripts": {
     "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
-    "dev:api": "node --disable-warning=ExperimentalWarning --import tsx --watch server/index.ts",
+    "dev:api": "node --disable-warning=ExperimentalWarning --import tsx --watch server/index.ts --rsvp-backend=demo",
     "dev:web": "vite",
     "build": "vite build && tsc -p tsconfig.server.json",
     "start": "node --disable-warning=ExperimentalWarning dist/server/server/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.tests.json",
     "test": "node --disable-warning=ExperimentalWarning node_modules/vitest/vitest.mjs run",
     "test:e2e": "playwright test",
     "db:migrate": "node --disable-warning=ExperimentalWarning --import tsx server/scripts/migrate.ts",
@@ -23,7 +23,9 @@
     "demo:clear": "node --disable-warning=ExperimentalWarning --import tsx server/scripts/demo.ts clear",
     "admin:hash": "node --disable-warning=ExperimentalWarning --import tsx server/scripts/hash-password.ts",
     "logo:vectorize": "python3 scripts/vectorize-logo.py",
-    "logo:assets": "node scripts/build-brand-assets.mjs"
+    "logo:assets": "node scripts/build-brand-assets.mjs",
+    "sheets:build": "node --disable-warning=ExperimentalWarning --import tsx scripts/build-apps-script.ts",
+    "demo": "npm run build && node --disable-warning=ExperimentalWarning dist/server/server/index.js --rsvp-backend=demo"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
@@ -41,6 +43,7 @@
     "@types/supertest": "^7.2.1",
     "@vitejs/plugin-react": "^6.1.2",
     "concurrently": "^10.0.6",
+    "esbuild": "^0.28.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "supertest": "^7.3.1",

@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { now, type DB } from './db.js';
 
 export const SESSION_COOKIE = 'bt_admin';
 const SESSION_DAYS = 7;
@@ -28,33 +27,40 @@ export function verifyPassword(password: string, stored: string): boolean {
 
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
-export function createSession(db: DB): { token: string; expires: Date } {
-  const token = crypto.randomBytes(32).toString('base64url');
-  const expires = new Date(Date.now() + SESSION_DAYS * 86_400_000);
-  db.prepare('DELETE FROM admin_sessions WHERE expires_at < ?').run(now());
-  db.prepare('INSERT INTO admin_sessions (token_hash, created_at, expires_at) VALUES (?, ?, ?)').run(
-    sha256(token),
-    now(),
-    expires.toISOString(),
-  );
-  return { token, expires };
+/**
+ * Sesiones del panel en memoria del proceso (solo el hash del token). No dependen de ninguna
+ * base de datos, así que funcionan igual con la demostración local o con Google Sheets.
+ * Al reiniciar el servidor (o cambiar la contraseña, que exige reiniciar) hay que entrar de nuevo.
+ */
+export function createSessionStore() {
+  const sessions = new Map<string, number>();
+  const prune = () => {
+    const t = Date.now();
+    for (const [k, exp] of sessions) if (exp < t) sessions.delete(k);
+  };
+  return {
+    create(): { token: string; expires: Date } {
+      prune();
+      const token = crypto.randomBytes(32).toString('base64url');
+      const expires = new Date(Date.now() + SESSION_DAYS * 86_400_000);
+      sessions.set(sha256(token), expires.getTime());
+      return { token, expires };
+    },
+    isValid(token: string | undefined): boolean {
+      if (!token) return false;
+      const exp = sessions.get(sha256(token));
+      return exp !== undefined && exp > Date.now();
+    },
+    destroy(token: string | undefined) {
+      if (token) sessions.delete(sha256(token));
+    },
+  };
 }
+export type SessionStore = ReturnType<typeof createSessionStore>;
 
-export function isValidSession(db: DB, token: string | undefined): boolean {
-  if (!token) return false;
-  const row = db.prepare('SELECT expires_at FROM admin_sessions WHERE token_hash = ?').get(sha256(token)) as
-    | { expires_at: string }
-    | undefined;
-  return Boolean(row && row.expires_at > now());
-}
-
-export function destroySession(db: DB, token: string | undefined) {
-  if (token) db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(sha256(token));
-}
-
-export function requireAdmin(db: DB) {
+export function requireAdmin(sessions: SessionStore) {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!isValidSession(db, req.cookies?.[SESSION_COOKIE])) {
+    if (!sessions.isValid(req.cookies?.[SESSION_COOKIE])) {
       res.status(401).json({ error: 'unauthorized', message: 'Inicia sesión para continuar.' });
       return;
     }

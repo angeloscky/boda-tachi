@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.server.json",
+  "compilerOptions": { "noEmit": true, "rootDir": "." },
+  "include": ["server", "shared", "tests/api", "scripts/*.ts", "apps-script/src/*.ts"],
+  "exclude": []
+}

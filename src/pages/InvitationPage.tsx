@@ -5,7 +5,9 @@ import { ApiFailure, fetchInvitation } from '../lib/api';
 import { LOGO } from '../lib/brand';
 import { buildIcs } from '../lib/ics';
 import { Envelope } from '../components/Envelope';
-import { Rsvp } from '../components/Rsvp';
+import { NonTransferableNote, Rsvp } from '../components/Rsvp';
+import { ShareGeneral } from '../components/ShareGeneral';
+import { uiMode } from '../lib/mode';
 import {
   CalendarIcon,
   CheckIcon,
@@ -23,12 +25,26 @@ interface Props {
   staticDemo?: boolean;
 }
 
+/** Familia FICTICIA para la vista estática (sin servidor). */
 const DEMO_INVITATION: PublicInvitation = {
-  name: 'Familia de ejemplo',
-  seats: 3,
+  name: 'Familia Ejemplo Robles',
+  seats: 4,
+  people: [
+    { id: 'DEMO-001-P1', name: 'Ana Robles Ejemplo' },
+    { id: 'DEMO-001-P2', name: 'Luis Robles Ejemplo' },
+    { id: 'DEMO-001-P3', name: 'Sara Robles Ejemplo' },
+    { id: 'DEMO-001-P4', name: 'Tomás Robles Ejemplo' },
+  ],
+  revision: 0,
   canRespond: true,
   closedReason: null,
   response: null,
+  mode: 'demo',
+};
+
+const BANNER: Partial<Record<ReturnType<typeof uiMode>, string>> = {
+  static: 'Vista de diseño sin servidor con una familia ficticia: puedes recorrer el formulario, pero ninguna respuesta se registra.',
+  demo: 'Demostración local con familias ficticias: las respuestas que guardes aquí son de prueba.',
 };
 
 const OPENED_KEY = 'boda-sobre-abierto';
@@ -99,6 +115,7 @@ function PlaceCard({ id, kind, place }: { id: string; kind: string; place: Place
 }
 
 export default function InvitationPage({ token, staticDemo }: Props) {
+  const mode = uiMode();
   const [envelopeDone, setEnvelopeDone] = useState(() => {
     try {
       return sessionStorage.getItem(OPENED_KEY) === '1' || location.hash.length > 1;
@@ -150,9 +167,9 @@ export default function InvitationPage({ token, staticDemo }: Props) {
 
   return (
     <div className="page">
-      {staticDemo ? (
-        <div className="demo-banner" role="note">
-          Vista de diseño sin servidor: la confirmación no se guarda en esta maqueta.
+      {BANNER[mode] ? (
+        <div className="demo-banner" role="note" data-testid="mode-banner">
+          {BANNER[mode]}
         </div>
       ) : null}
       {!envelopeDone ? <Envelope guestName={invitation?.name} onOpen={onEnvelopeOpen} /> : null}
@@ -353,15 +370,15 @@ export default function InvitationPage({ token, staticDemo }: Props) {
           <h2 id="t-confirmar" className="title">
             ¿Nos acompañas?
           </h2>
-          <Rsvp
-            token={token}
-            invitation={invitation}
-            loadError={loadError}
-            loading={loading}
-            onSaved={setInvitation}
-            onRetryLoad={load}
-            staticDemo={staticDemo}
-          />
+          {invitation ? <NonTransferableNote /> : null}
+          <Rsvp token={token} invitation={invitation} loadError={loadError} loading={loading} onChanged={setInvitation} onRetryLoad={load} mode={mode} />
+        </section>
+
+        <section className="section" id="compartir" aria-labelledby="t-compartir">
+          <h2 id="t-compartir" className="sr-only">
+            Compartir
+          </h2>
+          <ShareGeneral personal={Boolean(token)} />
         </section>
 
         <footer className="footer">

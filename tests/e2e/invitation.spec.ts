@@ -1,31 +1,37 @@
 import fs from 'node:fs';
-import { expect, test } from '@playwright/test';
-import { adminLogin, seedInvitation, ADMIN_PASSWORD } from './helpers';
+import { expect, test, type Page } from '@playwright/test';
+import { adminLogin, adminRow, ADMIN_PASSWORD, BASE, elementShot, seedInvitation, shared, skipEnvelope, stubShare } from './helpers';
 
 const SHOTS = 'docs/capturas';
 fs.mkdirSync(SHOTS, { recursive: true });
 
-test('(1)(3) recorrido completo: abrir, consultar, confirmar y volver a abrir', async ({ page, request }, info) => {
-  const inv = await seedInvitation(request, 'Familia Prueba Recorrido', 3);
+const ROBLES = ['Ana Ejemplo Robles', 'Bruno Ejemplo Robles', 'Carmen Ejemplo Robles', 'Diego Ejemplo Robles'];
+
+const person = (page: Page, name: string) => page.getByRole('checkbox', { name });
+const toReview = (page: Page) => page.getByRole('button', { name: 'Revisar respuesta' }).click();
+const confirmSave = (page: Page) => page.getByRole('button', { name: 'Confirmar y guardar' }).click();
+
+test('(3)(12) recorrido completo: abrir, elegir 2 de 4, revisar, guardar, volver a abrir y cambiar', async ({ page, request }, info) => {
+  const inv = await seedInvitation(request, 'Familia Ejemplo Robles', 4, ROBLES);
   await page.goto(`/i/${inv.token}`);
 
   const seal = page.getByRole('button', { name: 'Abrir invitación' });
   await expect(seal).toBeVisible();
-  await expect(page.getByText('Para Familia Prueba Recorrido')).toBeVisible();
+  await expect(page.getByText('Para Familia Ejemplo Robles')).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-01-sobre.png` });
   await seal.click();
   await expect(page.getByRole('dialog', { name: 'Apertura de la invitación' })).toBeHidden({ timeout: 5000 });
   await expect(page.getByRole('heading', { level: 1, name: /Sofía e Isaac/ })).toBeVisible();
-  await expect(page.getByText('Invitación para')).toBeVisible();
+  await expect(page.getByTestId('mode-banner')).toContainText(/[Dd]emostración/);
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-02-portada.png` });
 
   // Contenido y datos del evento
-  await expect(page.getByText('Queremos compartir este día contigo.')).toBeVisible();
   for (const name of ['Bibiano Vázquez Mora', 'María Jesús González Hernández', 'Elena Aguilar Cervantes', 'Carlos Patzka Aguirre', 'Gerardo Vázquez Mora', 'Alma Idalia Villalobos González']) {
     await expect(page.getByText(name, { exact: false }).first()).toBeAttached();
   }
   await expect(page.getByText('Te invitamos a vestir completamente de negro.')).toBeAttached();
   await expect(page.getByText(/solo para adultos/).first()).toBeAttached();
+  await expect(page.getByText(/salón/).first()).toBeAttached();
 
   // Enlaces externos: destino correcto, pestaña nueva y sin filtrar el enlace personal
   const links = {
@@ -40,13 +46,6 @@ test('(1)(3) recorrido completo: abrir, consultar, confirmar y volver a abrir', 
     await expect(a).toHaveAttribute('rel', /noopener/);
     await expect(a).toHaveAttribute('rel', /noreferrer/);
   }
-  const popupPromise = page.waitForEvent('popup');
-  // No se visita el sitio real durante la prueba: se intercepta la pestaña nueva.
-  await page.context().route(/maps\.app\.goo\.gl|google\.com\/maps|liverpool\.com\.mx/, (r) => r.fulfill({ status: 200, body: 'ok' }));
-  await page.getByTestId('maps-ceremonia').click();
-  const popup = await popupPromise;
-  expect(popup.url()).toContain('maps.app.goo.gl/v6wqtCa2jvmqhKu56');
-  await popup.close();
 
   // Captura de página completa: sin foco residual y sin la barra fija (que quedaría a media página).
   await page.evaluate(() => {
@@ -58,63 +57,191 @@ test('(1)(3) recorrido completo: abrir, consultar, confirmar y volver a abrir', 
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-03-invitacion-completa.png`, fullPage: true });
   await page.evaluate(() => (document.querySelector<HTMLElement>('.bottom-nav')!.style.visibility = ''));
 
-  // Confirmación
+  // Confirmación por persona
   await page.getByRole('link', { name: 'Confirmar', exact: true }).click();
-  await page.getByLabel('Sí, asistiremos').check();
-  await page.getByLabel('2 adultos').check();
-  await page.getByRole('button', { name: 'Enviar confirmación' }).click();
+  await expect(page.getByTestId('intransferible')).toContainText('Invitación personal e intransferible.');
+  await expect(page.getByTestId('intransferible')).toContainText('su lugar no podrá transferirse a otra persona');
+  const form = page.getByTestId('rsvp-form');
+  await expect(form).toContainText('Hemos reservado 4 lugares para ustedes.');
+  for (const n of ROBLES) await expect(person(page, n)).toBeVisible();
+  await person(page, ROBLES[0]).check();
+  await person(page, ROBLES[2]).check();
+  await elementShot(page, page.locator('#confirmar'), `${SHOTS}/${info.project.name}-04-seleccion.png`);
+  await toReview(page);
+  const review = page.getByTestId('rsvp-review');
+  await expect(review).toContainText('Asistirán 2 personas de 4 lugares reservados.');
+  await expect(review).toContainText(ROBLES[0]);
+  await expect(review).toContainText(ROBLES[2]);
+  await expect(review).not.toContainText(ROBLES[1]);
+  await elementShot(page, review, `${SHOTS}/${info.project.name}-05-revision.png`);
+  await confirmSave(page);
   const saved = page.getByTestId('rsvp-saved');
   await expect(saved).toContainText('Recibimos tu respuesta');
-  await expect(saved).toContainText('Asistirán 2 adultos');
-  await saved.screenshot({ path: `${SHOTS}/${info.project.name}-04-confirmacion-guardada.png` });
+  await expect(saved).toContainText('Asistirán 2 personas de 4 lugares reservados.');
+  await expect(saved).toContainText('Demostración: es una respuesta de prueba.');
+  await elementShot(page, saved, `${SHOTS}/${info.project.name}-06-confirmacion-guardada.png`);
+
+  // El cupo asignado no cambia aunque asistan 2.
+  let row = await adminRow(request, inv.id);
+  expect(row).toMatchObject({ attendance: 'attending', seats: 4, attendingCount: 2, revision: 1 });
+  expect(row.selectedPersonIds).toEqual([inv.people[0].id, inv.people[2].id]);
 
   // Volver a abrir el enlace: la respuesta está registrada y se puede cambiar
   await page.goto(`/i/${inv.token}#confirmar`);
   await page.reload();
   await expect(page.getByTestId('rsvp-saved')).toContainText('Tu respuesta está registrada');
-  await expect(page.getByTestId('rsvp-saved')).toContainText('Asistirán 2 adultos');
   await page.getByRole('button', { name: 'Cambiar mi respuesta' }).click();
-  await expect(page.getByLabel('2 adultos')).toBeChecked();
-  await page.getByLabel('3 adultos').check();
-  await page.getByRole('button', { name: 'Actualizar mi respuesta' }).click();
-  await expect(page.getByTestId('rsvp-saved')).toContainText('Asistirán 3 adultos');
+  await expect(person(page, ROBLES[0])).toBeChecked();
+  await expect(person(page, ROBLES[1])).not.toBeChecked();
+  await person(page, ROBLES[1]).check();
+  await toReview(page);
+  await confirmSave(page);
+  await expect(page.getByTestId('rsvp-saved')).toContainText('Asistirán 3 personas');
+  row = await adminRow(request, inv.id);
+  expect(row).toMatchObject({ seats: 4, attendingCount: 3, revision: 2 });
 
-  // El administrador la consulta
-  await adminLogin(request);
-  const row = await (await request.get(`/api/admin/invitations/${inv.id}`)).json();
-  expect(row).toMatchObject({ attendance: 'attending', adults: 3 });
+  // "Ninguno de nosotros podrá asistir"
+  await page.getByRole('button', { name: 'Cambiar mi respuesta' }).click();
+  await page.getByRole('checkbox', { name: 'Ninguno de nosotros podrá asistir' }).check();
+  await expect(person(page, ROBLES[0])).not.toBeChecked();
+  await toReview(page);
+  await expect(page.getByTestId('rsvp-review')).toContainText('Nadie de esta invitación podrá asistir.');
+  await confirmSave(page);
+  await expect(page.getByTestId('rsvp-saved')).toContainText('Nadie de esta invitación podrá asistir.');
+  row = await adminRow(request, inv.id);
+  expect(row).toMatchObject({ attendance: 'declined', attendingCount: 0, seats: 4 });
 });
 
-test('(9) si el servidor falla no se muestra éxito, se conservan los datos y se puede reintentar', async ({ page, request }) => {
-  const inv = await seedInvitation(request, 'Familia Prueba Fallo', 2);
+test('cupo menor que personas: no se puede marcar a más de las reservadas', async ({ page, request }) => {
+  const inv = await seedInvitation(request, 'Familia Muestra Sol', 3, ['Sol Uno', 'Sol Dos', 'Sol Tres', 'Sol Cuatro']);
   await page.goto(`/i/${inv.token}#confirmar`);
-  await page.route('**/api/invitations/*/rsvp', (r) => r.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"server_error","message":"Ocurrió un error en el servidor. Inténtalo de nuevo."}' }));
-  await page.getByLabel('Sí, asistiremos').check();
-  await page.getByLabel('2 adultos').check();
-  await page.getByRole('button', { name: 'Enviar confirmación' }).click();
+  await expect(page.getByText('Pueden confirmar hasta 3 lugares de las 4 personas de la lista.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Seleccionar a todos' })).toHaveCount(0);
+  for (const n of ['Sol Uno', 'Sol Dos', 'Sol Tres']) await person(page, n).check();
+  await expect(person(page, 'Sol Cuatro')).toBeDisabled();
+  await toReview(page);
+  await expect(page.getByTestId('rsvp-review')).toContainText('Asistirán 3 personas de 3 lugares reservados.');
+});
+
+test('(2) una familia solo ve a sus personas, nunca las de otra', async ({ page, request }) => {
+  await seedInvitation(request, 'Familia Ficticia Prado', 2, ['Pablo Ficticio Prado', 'Paula Ficticia Prado']);
+  const b = await seedInvitation(request, 'Marina Luna Prueba', 1, ['Marina Luna Prueba']);
+  await page.goto(`/i/${b.token}#confirmar`);
+  await expect(page.getByTestId('rsvp-form')).toContainText('Marca tu nombre si asistirás');
+  await expect(page.getByRole('checkbox', { name: 'No podré asistir' })).toBeVisible();
+  const html = await page.content();
+  expect(html).not.toContain('Prado');
+});
+
+test('(1)(11) el enlace general no confirma ni consulta invitaciones, y comparte solo la URL general', async ({ page, request }, info) => {
+  const apiCalls: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/api/')) apiCalls.push(r.url());
+  });
+  await stubShare(page);
+  await page.goto('/');
+  await skipEnvelope(page);
+  await expect(page.getByTestId('rsvp-general')).toContainText('Para confirmar necesitas el enlace personal que recibiste');
+  await expect(page.getByTestId('rsvp-form')).toHaveCount(0);
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  await expect(page.getByTestId('intransferible')).toHaveCount(0);
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', 'Sofía e Isaac · 22 de mayo de 2027');
+  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', `${BASE}/`);
+  await elementShot(page, page.getByTestId('rsvp-general'), `${SHOTS}/${info.project.name}-07-enlace-general.png`);
+  await page.getByTestId('share-general').click();
+  expect(await shared(page)).toEqual([expect.objectContaining({ url: `${BASE}/` })]);
+  expect(apiCalls.filter((u) => u.includes('/api/invitations'))).toEqual([]);
+
+  // Sin el menú del sistema: copia (o muestra) el enlace general.
+  const p2 = await page.context().newPage();
+  await stubShare(p2, false);
+  await p2.goto('/');
+  await skipEnvelope(p2);
+  await p2.getByTestId('share-general').click();
+  await expect(p2.locator('.share-general [role="status"]')).toContainText(`${BASE}/`);
+  await p2.close();
+
+  // Sin enlace personal no hay forma de registrar una confirmación.
+  const put = await request.put('/api/invitations/general/rsvp', { data: { status: 'declined', personIds: [], expectedRevision: 0, requestId: 'general-0001' } });
+  expect(put.status()).toBe(404);
+});
+
+test('(11) compartir desde un enlace personal envía solo la invitación general', async ({ page, request }) => {
+  const inv = await seedInvitation(request, 'Familia Compartir Demo', 2, ['Uno Compartir', 'Dos Compartir']);
+  await stubShare(page);
+  await page.goto(`/i/${inv.token}`);
+  await skipEnvelope(page);
+  await expect(page.getByTestId('share-general')).toBeVisible();
+  await expect(page.getByText('Comparte solo la invitación general.')).toBeVisible();
+  await page.getByTestId('share-general').click();
+  const [data] = await shared(page);
+  expect(data.url).toBe(`${BASE}/`);
+  expect(JSON.stringify(data)).not.toContain(inv.token);
+  // Ni los metadatos ni los enlaces de la página llevan el token.
+  const heads = await page.locator('head meta').evaluateAll((ms) => ms.map((m) => m.getAttribute('content') ?? ''));
+  expect(heads.join(' ')).not.toContain(inv.token);
+  const hrefs = await page.locator('a[href]').evaluateAll((as) => as.map((a) => a.getAttribute('href') ?? ''));
+  expect(hrefs.join(' ')).not.toContain(inv.token);
+});
+
+test('(8) si el servidor falla no se muestra éxito, se conserva la selección y se puede reintentar', async ({ page, request }) => {
+  const inv = await seedInvitation(request, 'Familia Prueba Fallo', 2, ['Fabio Fallo', 'Flor Fallo']);
+  await page.goto(`/i/${inv.token}#confirmar`);
+  await page.route('**/api/invitations/*/rsvp', (r) =>
+    r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"storage_unavailable","message":"No pudimos guardar tu respuesta en este momento. No se registró; inténtalo de nuevo."}' }),
+  );
+  await person(page, 'Flor Fallo').check();
+  await toReview(page);
+  await confirmSave(page);
   await expect(page.getByRole('alert')).toContainText('Tu respuesta no se ha guardado');
+  await expect(page.getByRole('alert')).toContainText('No se registró');
   await expect(page.getByTestId('rsvp-saved')).toHaveCount(0);
-  await expect(page.getByLabel('Sí, asistiremos')).toBeChecked();
-  await expect(page.getByLabel('2 adultos')).toBeChecked();
+  await expect(page.getByTestId('rsvp-review')).toContainText('Flor Fallo');
 
   // Sin conexión: mismo comportamiento
   await page.unroute('**/api/invitations/*/rsvp');
   await page.route('**/api/invitations/*/rsvp', (r) => r.abort('internetdisconnected'));
-  await page.getByRole('button', { name: 'Enviar confirmación' }).click();
+  await confirmSave(page);
   await expect(page.getByRole('alert')).toContainText('No pudimos comunicarnos con el servidor');
   await expect(page.getByTestId('rsvp-saved')).toHaveCount(0);
-
-  await adminLogin(request);
-  expect((await (await request.get(`/api/admin/invitations/${inv.id}`)).json()).attendance).toBe('pending');
+  // La selección sigue al volver al formulario.
+  await page.getByRole('button', { name: 'Cambiar selección' }).click();
+  await expect(person(page, 'Flor Fallo')).toBeChecked();
+  await expect(person(page, 'Fabio Fallo')).not.toBeChecked();
+  expect((await adminRow(request, inv.id)).attendance).toBe('pending');
 
   await page.unroute('**/api/invitations/*/rsvp');
-  await page.getByRole('button', { name: 'Enviar confirmación' }).click();
-  await expect(page.getByTestId('rsvp-saved')).toContainText('Asistirán 2 adultos');
-  expect((await (await request.get(`/api/admin/invitations/${inv.id}`)).json()).adults).toBe(2);
+  await toReview(page);
+  await confirmSave(page);
+  await expect(page.getByTestId('rsvp-saved')).toContainText('Asistirá 1 persona de 2 lugares reservados.');
+  expect(await adminRow(request, inv.id)).toMatchObject({ attendance: 'attending', attendingCount: 1 });
 });
 
-test('(5) un doble toque en enviar deja una sola respuesta', async ({ page, request }) => {
-  const inv = await seedInvitation(request, 'Familia Doble Toque', 2);
+test('(6) si otra persona guardó antes, se muestra la respuesta vigente y se puede revisar de nuevo', async ({ page, request }, info) => {
+  const inv = await seedInvitation(request, 'Familia Conflicto Demo', 3, ['Celia Conflicto', 'César Conflicto', 'Ciro Conflicto']);
+  await page.goto(`/i/${inv.token}#confirmar`);
+  await person(page, 'Celia Conflicto').check();
+  await person(page, 'César Conflicto').check();
+  await toReview(page);
+  // Mientras tanto, desde otro teléfono con el mismo enlace:
+  const other = await request.put(`/api/invitations/${inv.token}/rsvp`, {
+    data: { status: 'attending', personIds: [inv.people[2].id], expectedRevision: 0, requestId: 'otro-telefono-0001' },
+  });
+  expect(other.status()).toBe(200);
+  await confirmSave(page);
+  const conflict = page.getByTestId('rsvp-conflict');
+  await expect(conflict).toContainText('Esta invitación cambió desde otro dispositivo');
+  await expect(conflict).toContainText('Respuesta vigente: Asistirá 1 persona de 3 lugares reservados. Ciro Conflicto');
+  await expect(conflict).toContainText('Tu selección: Asistirán 2 personas');
+  await elementShot(page, page.getByTestId('rsvp-review'), `${SHOTS}/${info.project.name}-08-conflicto.png`);
+  expect((await adminRow(request, inv.id)).selectedPersonIds).toEqual([inv.people[2].id]);
+  await page.getByRole('button', { name: 'Guardar mi selección' }).click();
+  await expect(page.getByTestId('rsvp-saved')).toContainText('Asistirán 2 personas');
+  expect(await adminRow(request, inv.id)).toMatchObject({ revision: 2, selectedPersonIds: [inv.people[0].id, inv.people[1].id] });
+});
+
+test('(5) un doble toque en guardar envía una sola solicitud', async ({ page, request }) => {
+  const inv = await seedInvitation(request, 'Familia Doble Toque', 2, ['Dalia Doble', 'Darío Doble']);
   await page.goto(`/i/${inv.token}#confirmar`);
   let puts = 0;
   await page.route('**/api/invitations/*/rsvp', async (r) => {
@@ -122,15 +249,16 @@ test('(5) un doble toque en enviar deja una sola respuesta', async ({ page, requ
     await new Promise((res) => setTimeout(res, 400));
     await r.continue();
   });
-  await page.getByLabel('No podremos asistir').check();
-  const btn = page.getByRole('button', { name: 'Enviar confirmación' });
-  await btn.dblclick();
-  await expect(page.getByTestId('rsvp-saved')).toContainText('no podrán asistir');
+  await page.getByRole('checkbox', { name: 'Ninguno de nosotros podrá asistir' }).check();
+  await toReview(page);
+  await page.getByRole('button', { name: 'Confirmar y guardar' }).dblclick();
+  await expect(page.getByTestId('rsvp-saved')).toContainText('Nadie de esta invitación podrá asistir.');
   expect(puts).toBe(1);
+  expect((await adminRow(request, inv.id)).revision).toBe(1);
 });
 
-test('(2) navegación por teclado y movimiento reducido', async ({ browser, request }, info) => {
-  const inv = await seedInvitation(request, 'Familia Teclado', 2);
+test('navegación por teclado y movimiento reducido', async ({ browser, request }, info) => {
+  const inv = await seedInvitation(request, 'Familia Teclado', 2, ['Tania Teclado', 'Tomás Teclado']);
   const context = await browser.newContext({ ...(info.project.use as object), reducedMotion: 'reduce' });
   const page = await context.newPage();
   await page.goto(`/i/${inv.token}`);
@@ -151,17 +279,20 @@ test('(2) navegación por teclado y movimiento reducido', async ({ browser, requ
   expect(box && box.y >= 0 && box.height > 20).toBeTruthy(); // visible al recibir el foco
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/#confirmar$/);
-  // Llegar a la confirmación y responder solo con teclado
-  const yes = page.getByLabel('Sí, asistiremos');
-  await yes.focus();
+  // Responder solo con teclado
+  const first = person(page, 'Tania Teclado');
+  await first.focus();
   await page.keyboard.press('Space');
-  await expect(yes).toBeChecked();
+  await expect(first).toBeChecked();
   await page.keyboard.press('Tab');
   await page.keyboard.press('Space');
-  await expect(page.getByLabel('1 adulto')).toBeChecked();
-  await page.getByRole('button', { name: 'Enviar confirmación' }).focus();
+  await expect(person(page, 'Tomás Teclado')).toBeChecked();
+  await page.getByRole('button', { name: 'Revisar respuesta' }).focus();
   await page.keyboard.press('Enter');
-  await expect(page.getByTestId('rsvp-saved')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Revisa tu respuesta' })).toBeFocused();
+  await page.getByRole('button', { name: 'Confirmar y guardar' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('rsvp-saved')).toBeFocused();
   // Escape omite la animación
   const p2 = await context.newPage();
   await p2.goto(`/i/${inv.token}`);
@@ -172,36 +303,44 @@ test('(2) navegación por teclado y movimiento reducido', async ({ browser, requ
   await context.close();
 });
 
-test('página general, enlace inexistente e invitación sin lugares', async ({ page, request }) => {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Ver la invitación sin animación' }).click();
-  await expect(page.getByText('Confirma con tu enlace personal')).toBeVisible();
-  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', 'Sofía e Isaac · 22 de mayo de 2027');
-
+test('(7) enlace inexistente, truncado, revocado y regenerado; invitación sin cupo', async ({ page, request }) => {
   await page.goto('/i/ZZZZZZZZZZZZZZZZZZZZZZZZ#confirmar');
   await expect(page.getByRole('alert')).toContainText('No encontramos esta invitación');
-  // Un enlace truncado también avisa, en la portada y en la confirmación
   await page.goto('/i/abc#confirmar');
   await expect(page.getByRole('alert')).toContainText('No encontramos esta invitación');
   await expect(page.getByRole('note').filter({ hasText: 'No encontramos esta invitación personal' })).toBeAttached();
 
-  const inv = await seedInvitation(request, 'Familia Pendiente de Lugares', null);
+  const inv = await seedInvitation(request, 'Familia Enlace Revocado', 1, ['Rebeca Revocada']);
+  await adminLogin(request);
+  expect((await request.post(`/api/admin/invitations/${inv.id}/revoke-link`)).status()).toBe(200);
   await page.goto(`/i/${inv.token}#confirmar`);
+  await expect(page.getByRole('alert')).toContainText('No encontramos esta invitación');
+  await expect(page.getByTestId('rsvp-form')).toHaveCount(0);
+  const regen = await (await request.post(`/api/admin/invitations/${inv.id}/regenerate-link`)).json();
+  expect(regen.token).not.toBe(inv.token);
+  await page.goto(`/i/${regen.token}#confirmar`);
+  await expect(page.getByTestId('rsvp-form')).toBeVisible();
+
+  const pending = await seedInvitation(request, 'Familia Pendiente de Lugares', null, []);
+  await page.goto(`/i/${pending.token}#confirmar`);
   await expect(page.getByText('Aún estamos preparando los detalles de tu invitación')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Enviar confirmación' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Revisar respuesta' })).toHaveCount(0);
   // La vista previa para compartir no incluye datos de la familia
-  const html = await (await request.get(`/i/${inv.token}`)).text();
+  const html = await (await request.get(`/i/${pending.token}`)).text();
   expect(html).not.toContain('Familia Pendiente de Lugares');
+  expect(html).not.toContain(pending.token);
 });
 
-test('(8) administración: inaccesible sin sesión y muestra la confirmación con sesión', async ({ page, request, playwright }, info) => {
-  const anon = await playwright.request.newContext({ baseURL: 'http://localhost:3200' });
+test('administración: inaccesible sin sesión; lista, edición con personas y mensaje simulado', async ({ page, request, playwright }, info) => {
+  const anon = await playwright.request.newContext({ baseURL: BASE });
   expect((await anon.get('/api/admin/invitations')).status()).toBe(401);
-  expect((await anon.get('/api/admin/export.csv')).status()).toBe(401);
+  expect((await anon.get('/api/admin/export/invitaciones.csv')).status()).toBe(401);
   await anon.dispose();
 
-  const inv = await seedInvitation(request, 'Familia Panel Admin', 4);
-  await request.put(`/api/invitations/${inv.token}/rsvp`, { data: { status: 'attending', adults: 4 } });
+  const inv = await seedInvitation(request, 'Familia Panel Admin', 4, ['Adela Panel', 'Alan Panel', 'Aurora Panel', 'Arturo Panel']);
+  await request.put(`/api/invitations/${inv.token}/rsvp`, {
+    data: { status: 'attending', personIds: [inv.people[0].id, inv.people[3].id], expectedRevision: 0, requestId: 'panel-admin-0001' },
+  });
 
   await page.goto('/admin');
   await expect(page.getByRole('heading', { name: 'Panel de invitaciones' })).toBeVisible();
@@ -211,13 +350,23 @@ test('(8) administración: inaccesible sin sesión y muestra la confirmación co
   await page.getByLabel('Contraseña').fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: 'Entrar' }).click();
   await expect(page.getByRole('heading', { name: 'Invitaciones' })).toBeVisible();
-  await page.getByRole('combobox', { name: 'Datos de demostración' }).selectOption('include');
-  await page.getByPlaceholder('Buscar por nombre').fill(inv.code);
+  await expect(page.getByTestId('demo-notice')).toBeVisible();
+  await page.getByPlaceholder('Buscar por grupo, persona, ID o teléfono').fill('Aurora Panel');
   const row = page.getByRole('row', { name: new RegExp(inv.code) });
-  await expect(row).toContainText('Asistirá · 4');
-  await page.screenshot({ path: `${SHOTS}/${info.project.name}-05-admin-lista.png`, fullPage: true });
+  await expect(row).toContainText('Asistirá · 2');
+  await expect(row).toContainText('Adela Panel, Arturo Panel');
+  await expect(row).toContainText('4 / 4');
+  await page.screenshot({ path: `${SHOTS}/${info.project.name}-09-admin-lista.png`, fullPage: true });
+
+  await row.getByRole('button', { name: 'Editar Familia Panel Admin' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('Nombre de la persona 1')).toHaveValue('Adela Panel');
+  await expect(dialog.getByTestId('admin-link')).toContainText(inv.token);
+  await page.screenshot({ path: `${SHOTS}/${info.project.name}-10-admin-edicion.png` });
+  await dialog.getByRole('button', { name: 'Cerrar' }).click();
+
   await row.getByRole('button', { name: 'Mensaje para Familia Panel Admin' }).click();
   await expect(page.getByText('Este panel no envía mensajes')).toBeVisible();
   await expect(page.locator('.adm-wa-bubble')).toContainText(inv.link);
-  await page.screenshot({ path: `${SHOTS}/${info.project.name}-06-admin-mensaje.png` });
+  await page.screenshot({ path: `${SHOTS}/${info.project.name}-11-admin-mensaje.png` });
 });

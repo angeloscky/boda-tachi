@@ -1,10 +1,12 @@
-import type { PublicInvitation, RsvpInput } from '../../shared/types';
+import type { PublicInvitation, RsvpRequest, SaveRsvpResult } from '../../shared/types';
 
 export class ApiFailure extends Error {
   constructor(
     public code: string,
     message: string,
     public status: number,
+    /** Cuerpo completo del error (p. ej. la respuesta vigente en un conflicto). */
+    public body: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -32,16 +34,27 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   }
   if (!res.ok) {
     const d = (data ?? {}) as { error?: string; message?: string };
-    throw new ApiFailure(d.error ?? 'server', d.message ?? SERVER_DOWN, res.status);
+    throw new ApiFailure(d.error ?? 'server', d.message ?? SERVER_DOWN, res.status, (data ?? {}) as Record<string, unknown>);
   }
+  // Un 200 sin el cuerpo esperado tampoco cuenta como guardado.
+  if (data === null) throw new ApiFailure('server', SERVER_DOWN, res.status);
   return data as T;
 }
 
-export const fetchInvitation = (token: string) =>
-  request<PublicInvitation>(`/api/invitations/${encodeURIComponent(token)}`);
+export const fetchInvitation = (token: string) => request<PublicInvitation>(`/api/invitations/${encodeURIComponent(token)}`);
 
-export const saveRsvp = (token: string, input: RsvpInput) =>
-  request<PublicInvitation>(`/api/invitations/${encodeURIComponent(token)}/rsvp`, {
+export async function saveRsvp(token: string, input: RsvpRequest): Promise<SaveRsvpResult> {
+  const out = await request<SaveRsvpResult>(`/api/invitations/${encodeURIComponent(token)}/rsvp`, {
     method: 'PUT',
     body: JSON.stringify(input),
   });
+  if (!out?.invitation?.response || !['saved', 'unchanged', 'replay'].includes(out.outcome)) throw new ApiFailure('server', SERVER_DOWN, 200);
+  return out;
+}
+
+/** Identificador de solicitud: el mismo en los reintentos de un mismo envío, para no duplicar. */
+export function newRequestId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}

@@ -14,6 +14,21 @@ export interface AppConfig {
   production: boolean;
   /** Saltos de proxy de confianza para obtener la IP real (0 = ninguno). */
   trustProxy: number;
+  /**
+   * Dónde se guardan las confirmaciones. Sin valor = disabled: la confirmación aparece
+   * como no habilitada; nunca se activa la demostración por omisión.
+   */
+  rsvpBackend: 'demo' | 'sheets' | 'disabled';
+  sheets: { url: string | null; secret: string | null; timeoutMs: number };
+}
+
+const BACKENDS = ['demo', 'sheets', 'disabled'] as const;
+
+export function parseBackend(value: string | undefined): AppConfig['rsvpBackend'] {
+  const v = (value ?? '').trim().toLowerCase();
+  if (!v) return 'disabled';
+  if ((BACKENDS as readonly string[]).includes(v)) return v as AppConfig['rsvpBackend'];
+  throw new Error(`RSVP_BACKEND="${value}" no es válido. Usa demo, sheets o disabled.`);
 }
 
 /** Raíz del proyecto, tanto en desarrollo (server/) como compilado (dist/server/server/). */
@@ -36,7 +51,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const config: AppConfig = {
     port: Number(env.PORT || 3000),
     publicBaseUrl,
-    dbPath: path.resolve(root, env.DB_PATH || 'data/boda.sqlite'),
+    dbPath: path.resolve(root, env.DB_PATH || 'data/demo.sqlite'),
     adminPasswordHash: env.ADMIN_PASSWORD_HASH || null,
     adminPasswordPlain: env.ADMIN_PASSWORD || null,
     cookieSecure: env.COOKIE_SECURE ? env.COOKIE_SECURE === 'true' : publicBaseUrl.startsWith('https://'),
@@ -44,6 +59,12 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     messagingProvider: env.MESSAGING_PROVIDER || 'simulation',
     production,
     trustProxy: Number(env.TRUST_PROXY || 0),
+    rsvpBackend: parseBackend(env.RSVP_BACKEND),
+    sheets: {
+      url: env.SHEETS_WEBAPP_URL?.trim() || null,
+      secret: env.SHEETS_SHARED_SECRET || null,
+      timeoutMs: Number(env.SHEETS_TIMEOUT_MS || 15_000),
+    },
     ...overrides,
   };
   // La base nunca debe quedar dentro de un directorio que se sirve o se publica.

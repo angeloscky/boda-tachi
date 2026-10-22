@@ -2,7 +2,9 @@
 Vectoriza el logo a partir de la captura original (JPEG 738x1600).
 
 Pasos: recorta el área blanca central, amplía 6x con Lanczos, umbraliza y traza
-con potrace. El resultado es un trazado automático: conserva la forma del
+con potrace. Los textos (nombres y fecha) se umbralizan de forma adaptativa: cada
+trazo se corta a la mitad entre su tono más oscuro y el blanco, para que las líneas
+finas y claras de la captura (diagonales de M, A y Y) no queden partidas. El resultado es un trazado automático: conserva la forma del
 original pero NO es el archivo vectorial de la diseñadora. Si aparece el SVG
 original, debe reemplazar a estos archivos.
 
@@ -10,6 +12,7 @@ Uso: python3 scripts/vectorize-logo.py
 Requiere: Pillow y potrace (apt install potrace).
 """
 import re, subprocess, pathlib
+import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -17,6 +20,7 @@ SRC = ROOT / 'assets/logo/original/WhatsApp Image 2026-10-21 at 8.42.27 PM.jpeg'
 OUT = ROOT / 'assets/logo/vector'
 OUT.mkdir(parents=True, exist_ok=True)
 SCALE = 6
+CLOSE = 3
 
 im = Image.open(SRC).convert('L')
 w, h = im.size
@@ -42,10 +46,39 @@ def binarize(img, threshold, blur):
     big = img.resize((img.width * SCALE, img.height * SCALE), Image.LANCZOS).filter(ImageFilter.GaussianBlur(blur))
     return big.point(lambda p: 0 if p < threshold else 255).convert('L')
 
-# El monograma tiene trazos gruesos; los textos tienen líneas finas que en la
-# captura quedan grises, así que se umbralizan más claro para no romperlas.
+def binarize_adaptive(img, blur, window, close=0, ink_max=215, floor=242):
+    """Umbral local: mitad entre el tono más oscuro del entorno y el blanco.
+
+    Un trazo fino de la captura es gris claro (no negro); con un umbral fijo se
+    parte en puntos. Aquí cada trazo se corta a media intensidad de sí mismo, así
+    conserva su continuidad y un grosor parecido al de los trazos oscuros.
+    `ink_max` evita convertir en tinta el ruido JPEG lejos de cualquier trazo.
+    """
+    big = img.resize((img.width * SCALE, img.height * SCALE), Image.LANCZOS).filter(ImageFilter.GaussianBlur(blur))
+    local_min = np.asarray(big.filter(ImageFilter.MinFilter(window)), dtype=np.float32)
+    px = np.asarray(big, dtype=np.float32)
+    ink = (px < (local_min + 255) / 2) & (local_min < ink_max) & (px < floor)
+    if close:
+        # Cierre morfológico con un disco pequeño: une cortes de menos de un píxel de la
+        # captura original sin dejar esquinas cuadradas.
+        ink = ~dilate(~dilate(ink, close), close)
+    return Image.fromarray(np.where(ink, 0, 255).astype(np.uint8), 'L')
+
+def dilate(mask, r):
+    out = mask.copy()
+    h, w = mask.shape
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            if dx * dx + dy * dy > r * r or (dx == 0 and dy == 0):
+                continue
+            src = mask[max(-dy, 0):h - max(dy, 0), max(-dx, 0):w - max(dx, 0)]
+            out[max(dy, 0):h - max(-dy, 0), max(dx, 0):w - max(-dx, 0)] |= src
+    return out
+
+# El monograma tiene trazos gruesos y oscuros: umbral fijo. Los textos tienen
+# líneas finas que en la captura quedan grises: umbral adaptativo.
 top_bw = binarize(art.crop((0, 0, art.width, gap)), 128, 1.2)
-bottom_bw = binarize(art.crop((0, gap, art.width, art.height)), 185, 0.8)
+bottom_bw = binarize_adaptive(art.crop((0, gap, art.width, art.height)), 1.4, 2 * SCALE + 1, close=CLOSE)
 bw = Image.new('L', (art.width * SCALE, art.height * SCALE), 255)
 bw.paste(top_bw, (0, 0))
 bw.paste(bottom_bw, (0, gap * SCALE))

@@ -1,147 +1,214 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { adminAgent, countResponses, createInv, makeApp, tempDbPath, testConfig } from './helpers.js';
+import { adminAgent, countResponses, createInv, historyCount, makeApp, reqId, rsvpBody, tempDbPath, testConfig } from './helpers.js';
 import { openDb } from '../../server/db.js';
 import { createApp } from '../../server/app.js';
+import type { GuestStore } from '../../server/store.js';
+import { HttpError } from '../../server/errors.js';
 
-describe('confirmación de asistencia', () => {
-  it('guarda la respuesta y la devuelve al volver a abrir el enlace', async () => {
+const FOUR = ['Ana Ficticia', 'Luis Ficticio', 'Sara Ficticia', 'Tomás Ficticio'];
+
+describe('confirmación por personas (demostración local)', () => {
+  it('2 de 4 personas confirmadas conservan los 4 lugares asignados', async () => {
     const { app } = makeApp();
     const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'T-1', name: 'Familia Prueba', seats: 3 });
-    const put = await request(app).put(`/api/invitations/${inv.token}/rsvp`).send({ status: 'attending', adults: 2 });
+    const inv = await createInv(admin, { code: 'F-1', name: 'Familia Prueba', seats: 4, people: FOUR });
+    const view = await request(app).get(`/api/invitations/${inv.token}`);
+    expect(view.body).toMatchObject({ name: 'Familia Prueba', seats: 4, revision: 0, response: null, canRespond: true, mode: 'demo' });
+    expect(view.body.people.map((p: { name: string }) => p.name)).toEqual(FOUR);
+
+    const ids = inv.people.slice(0, 2).map((p) => p.id);
+    const put = await request(app).put(`/api/invitations/${inv.token}/rsvp`).send(rsvpBody([ids[1], ids[0]]));
     expect(put.status).toBe(200);
-    expect(put.body.response).toMatchObject({ status: 'attending', adults: 2 });
-    const get = await request(app).get(`/api/invitations/${inv.token}`);
-    expect(get.body.response).toMatchObject({ status: 'attending', adults: 2 });
+    expect(put.body.outcome).toBe('saved');
+    expect(put.body.invitation).toMatchObject({ seats: 4, revision: 1, response: { status: 'attending', attending: 2, personIds: ids } });
+
+    const row = (await admin.get(`/api/admin/invitations/${inv.id}`)).body;
+    expect(row).toMatchObject({ seats: 4, attendance: 'attending', attendingCount: 2, selectedPersonIds: ids });
+    const summary = (await admin.get('/api/admin/summary')).body;
+    expect(summary).toMatchObject({ seatsAssigned: 4, attendingPeople: 2, unusedSeats: 2 });
   });
 
-  it('(4) la respuesta persiste al cerrar y reabrir la base de datos', async () => {
-    const dbPath = tempDbPath('persist');
-    const first = makeApp(dbPath);
-    const admin = await adminAgent(first.app);
-    const inv = await createInv(admin, { code: 'T-P', name: 'Familia Persistente', seats: 2 });
-    await request(first.app).put(`/api/invitations/${inv.token}/rsvp`).send({ status: 'attending', adults: 2 }).expect(200);
-    first.db.close();
-    const second = makeApp(dbPath);
-    const get = await request(second.app).get(`/api/invitations/${inv.token}`);
-    expect(get.body.response).toMatchObject({ status: 'attending', adults: 2 });
-    second.db.close();
-  });
-
-  it('(5) un doble envío o reintentos en paralelo dejan una sola respuesta vigente', async () => {
-    const { app, db } = makeApp();
-    const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'T-2', name: 'Familia Doble', seats: 4 });
-    const results = await Promise.all(
-      Array.from({ length: 12 }, () => request(app).put(`/api/invitations/${inv.token}/rsvp`).send({ status: 'attending', adults: 3 })),
-    );
-    expect(results.every((r) => r.status === 200)).toBe(true);
-    expect(countResponses(db, inv.id)).toBe(1);
-    const rev = db.prepare('SELECT revision FROM responses WHERE invitation_id = ?').get(inv.id) as { revision: number };
-    expect(rev.revision).toBe(1);
-    const hist = db.prepare('SELECT COUNT(*) AS n FROM response_history WHERE invitation_id = ?').get(inv.id) as { n: number };
-    expect(hist.n).toBe(1);
-    const summary = await admin.get('/api/admin/summary');
-    expect(summary.body.adultsConfirmed).toBe(3);
-  });
-
-  it('(6) rechaza en servidor más asistentes que lugares asignados', async () => {
+  it('rechaza nombres ajenos, IDs duplicados o inventados y cupos manipulados', async () => {
     const { app } = makeApp();
     const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'T-3', name: 'Familia Límite', seats: 2 });
-    const res = await request(app).put(`/api/invitations/${inv.token}/rsvp`).send({ status: 'attending', adults: 3 });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('too_many_adults');
-    const get = await request(app).get(`/api/invitations/${inv.token}`);
-    expect(get.body.response).toBeNull();
-  });
-
-  it('valida tipo, signo y coherencia de la respuesta', async () => {
-    const { app } = makeApp();
-    const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'T-4', name: 'Familia Validación', seats: 3 });
-    const url = `/api/invitations/${inv.token}/rsvp`;
-    const cases: [unknown, string][] = [
-      [{ status: 'attending', adults: 1.5 }, 'invalid_adults'],
-      [{ status: 'attending', adults: '2' }, 'invalid_adults'],
-      [{ status: 'attending', adults: -1 }, 'invalid_adults'],
-      [{ status: 'attending', adults: 0 }, 'invalid_adults'],
-      [{ status: 'attending' }, 'invalid_adults'],
-      [{ status: 'declined', adults: 2 }, 'invalid_adults'],
-      [{ status: 'maybe', adults: 1 }, 'invalid_status'],
-      [{ status: 'attending', adults: 1e9 }, 'too_many_adults'],
+    const a = await createInv(admin, { code: 'A', name: 'Familia A', seats: 2, people: ['A uno', 'A dos', 'A tres'] });
+    const b = await createInv(admin, { code: 'B', name: 'Familia B', seats: 3, people: ['B uno'] });
+    const url = `/api/invitations/${a.token}/rsvp`;
+    const cases: [object, string][] = [
+      [rsvpBody([b.people[0].id]), 'unknown_person'],
+      [rsvpBody(['A-P99']), 'unknown_person'],
+      [rsvpBody([a.people[0].id, a.people[0].id]), 'duplicate_person'],
+      [rsvpBody(a.people.map((p) => p.id)), 'over_capacity'],
+      [{ ...rsvpBody([a.people[0].id]), seats: 5 }, 'forbidden_fields'],
+      [{ ...rsvpBody([a.people[0].id]), attending: 3 }, 'forbidden_fields'],
+      [{ ...rsvpBody([a.people[0].id]), people: [{ name: 'Intruso' }] }, 'forbidden_fields'],
+      [{ ...rsvpBody([]), status: 'attending' }, 'no_people_selected'],
+      [{ ...rsvpBody([a.people[0].id]), status: 'declined' }, 'declined_with_people'],
     ];
     for (const [body, code] of cases) {
-      const res = await request(app).put(url).send(body as object);
+      const res = await request(app).put(url).send(body);
       expect(res.status, JSON.stringify(body)).toBe(400);
       expect(res.body.error, JSON.stringify(body)).toBe(code);
     }
-    const bad = await request(app).put(url).set('Content-Type', 'application/json').send('{"status":');
-    expect(bad.status).toBe(400);
-    const ok = await request(app).put(url).send({ status: 'declined', adults: 0 });
-    expect(ok.status).toBe(200);
-    expect(ok.body.response).toMatchObject({ status: 'declined', adults: 0 });
+    const view = (await request(app).get(`/api/invitations/${a.token}`)).body;
+    expect(view).toMatchObject({ seats: 2, response: null });
+    expect(view.people).toHaveLength(3);
+    expect((await admin.get(`/api/admin/invitations/${b.id}`)).body.attendance).toBe('pending');
   });
 
-  it('permite actualizar la respuesta mientras esté abierta y la bloquea al cerrar', async () => {
+  it('reenviar la misma solicitud no duplica, y doce envíos en paralelo dejan una sola respuesta', async () => {
+    const { app, db } = makeApp();
+    const admin = await adminAgent(app);
+    const inv = await createInv(admin, { code: 'D-1', name: 'Familia Doble', seats: 4, people: FOUR });
+    const body = rsvpBody([inv.people[0].id, inv.people[2].id]);
+    const first = await request(app).put(`/api/invitations/${inv.token}/rsvp`).send(body);
+    const again = await request(app).put(`/api/invitations/${inv.token}/rsvp`).send(body);
+    expect(first.body.outcome).toBe('saved');
+    expect(again.status).toBe(200);
+    expect(again.body.outcome).toBe('replay');
+    expect(again.body.invitation.revision).toBe(1);
+
+    const other = await createInv(admin, { code: 'D-2', name: 'Familia Paralela', seats: 4, people: FOUR });
+    const same = rsvpBody([other.people[1].id]);
+    const results = await Promise.all(Array.from({ length: 12 }, () => request(app).put(`/api/invitations/${other.token}/rsvp`).send(same)));
+    expect(results.every((r) => r.status === 200)).toBe(true);
+    expect(countResponses(db, other.id)).toBe(1);
+    expect(historyCount(db, other.id)).toBe(1);
+    expect((db.prepare('SELECT revision FROM responses WHERE invitation_id = ?').get(other.id) as { revision: number }).revision).toBe(1);
+  });
+
+  it('dos personas con el mismo enlace: la segunda recibe conflicto con la respuesta vigente, sin sobrescribir', async () => {
     const { app } = makeApp();
     const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'T-5', name: 'Familia Cambio', seats: 2 });
+    const inv = await createInv(admin, { code: 'C-1', name: 'Familia Conflicto', seats: 4, people: FOUR });
     const url = `/api/invitations/${inv.token}/rsvp`;
-    await request(app).put(url).send({ status: 'attending', adults: 2 }).expect(200);
-    await request(app).put(url).send({ status: 'declined', adults: 0 }).expect(200);
+    // Ambas abrieron la invitación con revisión 0.
+    const one = await request(app).put(url).send(rsvpBody([inv.people[0].id], { expectedRevision: 0 }));
+    expect(one.status).toBe(200);
+    const two = await request(app).put(url).send(rsvpBody([], { status: 'declined', expectedRevision: 0 }));
+    expect(two.status).toBe(409);
+    expect(two.body.error).toBe('conflict');
+    expect(two.body.current).toMatchObject({ revision: 1, response: { status: 'attending', personIds: [inv.people[0].id] } });
+    // Tras revisar la vigente, puede guardar a propósito con la revisión actual.
+    const retry = await request(app).put(url).send(rsvpBody([], { status: 'declined', expectedRevision: 1 }));
+    expect(retry.status).toBe(200);
+    expect(retry.body.invitation).toMatchObject({ revision: 2, response: { status: 'declined', attending: 0 } });
+  });
+
+  it('un enlace revocado deja de funcionar; uno regenerado sí funciona', async () => {
+    const { app } = makeApp();
+    const admin = await adminAgent(app);
+    const inv = await createInv(admin, { code: 'R-1', name: 'Familia Revocada', seats: 2, people: ['Uno', 'Dos'] });
+    await admin.post(`/api/admin/invitations/${inv.id}/revoke-link`).expect(200);
+    expect((await request(app).get(`/api/invitations/${inv.token}`)).status).toBe(404);
+    expect((await request(app).put(`/api/invitations/${inv.token}/rsvp`).send(rsvpBody([inv.people[0].id]))).status).toBe(404);
+    const row = (await admin.get(`/api/admin/invitations/${inv.id}`)).body;
+    expect(row).toMatchObject({ linkRevoked: true, link: null });
+    const fresh = (await admin.post(`/api/admin/invitations/${inv.id}/regenerate-link`)).body;
+    expect(fresh.token).not.toBe(inv.token);
+    expect((await request(app).get(`/api/invitations/${fresh.token}`)).status).toBe(200);
+    expect((await request(app).get(`/api/invitations/${inv.token}`)).status).toBe(404);
+  });
+
+  it('un error de almacenamiento responde con error y nunca con éxito', async () => {
+    const dbPath = tempDbPath('falla');
+    const db = openDb(dbPath);
+    const failing: GuestStore = {
+      mode: 'demo',
+      uiMode: 'demo',
+      getInvitation: async () => {
+        throw new Error('disco lleno');
+      },
+      saveResponse: async () => {
+        throw new HttpError(503, 'storage_unavailable', 'No pudimos guardar tu respuesta en este momento. No se registró; inténtalo de nuevo.');
+      },
+      status: async () => ({ mode: 'demo', ready: false, detail: 'falla simulada', canManageList: true }),
+    };
+    const app = createApp(db, testConfig(dbPath), { store: failing });
+    const put = await request(app).put('/api/invitations/demo_AAAAAAAAAAAAAAAAAAAAAAAA/rsvp').send(rsvpBody(['X-P1']));
+    expect(put.status).toBe(503);
+    expect(put.body).toEqual({ error: 'storage_unavailable', message: expect.stringMatching(/No se registró/) });
+    const get = await request(app).get('/api/invitations/demo_AAAAAAAAAAAAAAAAAAAAAAAA');
+    expect(get.status).toBe(500);
+    expect(get.body.error).toBe('server_error');
+    expect(JSON.stringify(get.body)).not.toMatch(/disco/);
+    db.close();
+  });
+
+  it('una falla de SQLite a media transacción no deja respuesta ni historial', async () => {
+    const { app, db } = makeApp();
+    const admin = await adminAgent(app);
+    const inv = await createInv(admin, { code: 'T-1', name: 'Familia Transacción', seats: 2, people: ['Uno', 'Dos'] });
+    // El historial falla: la transacción completa se revierte.
+    db.exec(`CREATE TRIGGER falla BEFORE INSERT ON response_history BEGIN SELECT RAISE(ABORT, 'falla simulada'); END;`);
+    const put = await request(app).put(`/api/invitations/${inv.token}/rsvp`).send(rsvpBody([inv.people[0].id]));
+    expect(put.status).toBe(500);
+    expect(countResponses(db, inv.id)).toBe(0);
+    db.exec('DROP TRIGGER falla');
+    const ok = await request(app).put(`/api/invitations/${inv.token}/rsvp`).send(rsvpBody([inv.people[0].id]));
+    expect(ok.status).toBe(200);
+  });
+
+  it('cerrar confirmaciones conserva la respuesta y bloquea cambios', async () => {
+    const { app } = makeApp();
+    const admin = await adminAgent(app);
+    const inv = await createInv(admin, { code: 'K-1', name: 'Familia Cierre', seats: 2, people: ['Uno', 'Dos'] });
+    const url = `/api/invitations/${inv.token}/rsvp`;
+    await request(app).put(url).send(rsvpBody([inv.people[0].id])).expect(200);
     await admin.put('/api/admin/settings').send({ rsvpOpen: false }).expect(200);
-    const closed = await request(app).put(url).send({ status: 'attending', adults: 1 });
+    const closed = await request(app).put(url).send(rsvpBody([inv.people[1].id], { expectedRevision: 1 }));
     expect(closed.status).toBe(409);
     expect(closed.body.error).toBe('rsvp_closed');
-    const get = await request(app).get(`/api/invitations/${inv.token}`);
-    expect(get.body).toMatchObject({ canRespond: false, closedReason: 'rsvp_closed', response: { status: 'declined', adults: 0 } });
+    const get = (await request(app).get(`/api/invitations/${inv.token}`)).body;
+    expect(get).toMatchObject({ canRespond: false, closedReason: 'rsvp_closed', response: { personIds: [inv.people[0].id] } });
   });
 
-  it('una invitación sin lugares asignados queda pendiente y no acepta confirmación', async () => {
+  it('sin cupo o sin personas la invitación no puede confirmar', async () => {
     const { app } = makeApp();
     const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'T-6', name: 'Familia Sin Lugares', seats: null });
-    const get = await request(app).get(`/api/invitations/${inv.token}`);
-    expect(get.body).toMatchObject({ seats: null, canRespond: false, closedReason: 'seats_unassigned' });
-    const res = await request(app).put(`/api/invitations/${inv.token}/rsvp`).send({ status: 'attending', adults: 1 });
-    expect(res.status).toBe(409);
-    const summary = await admin.get('/api/admin/summary');
-    expect(summary.body.incomplete).toBe(1);
+    const noSeats = await createInv(admin, { code: 'S-1', name: 'Sin cupo', seats: null, people: ['Uno'] });
+    const noPeople = await createInv(admin, { code: 'S-2', name: 'Sin personas', seats: 2 });
+    expect((await request(app).get(`/api/invitations/${noSeats.token}`)).body).toMatchObject({ canRespond: false, closedReason: 'seats_unassigned' });
+    expect((await request(app).get(`/api/invitations/${noPeople.token}`)).body).toMatchObject({ canRespond: false, closedReason: 'no_people', people: [] });
+    expect((await request(app).put(`/api/invitations/${noSeats.token}/rsvp`).send(rsvpBody([noSeats.people[0].id]))).status).toBe(409);
   });
 
-  it('un enlace desactivado o inexistente responde 404', async () => {
+  it('el administrador no puede bajar el cupo ni desactivar a quien ya confirmó', async () => {
     const { app } = makeApp();
     const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'T-7', name: 'Familia Desactivada', seats: 2 });
-    await admin.put(`/api/admin/invitations/${inv.id}`).send({ code: 'T-7', name: 'Familia Desactivada', seats: 2, enabled: false }).expect(200);
-    expect((await request(app).get(`/api/invitations/${inv.token}`)).status).toBe(404);
-    expect((await request(app).get('/api/invitations/AAAAAAAAAAAAAAAAAAAAAAAA')).status).toBe(404);
-    expect((await request(app).get('/api/invitations/corto')).status).toBe(404);
+    const inv = await createInv(admin, { code: 'G-1', name: 'Familia Guardia', seats: 4, people: FOUR });
+    await request(app).put(`/api/invitations/${inv.token}/rsvp`).send(rsvpBody(inv.people.slice(0, 3).map((p) => p.id))).expect(200);
+    const lower = await admin.put(`/api/admin/invitations/${inv.id}`).send({ seats: 2 });
+    expect(lower.status).toBe(409);
+    const people = inv.people.map((p, i) => ({ id: p.id, name: p.name, active: i !== 0 }));
+    const deactivate = await admin.put(`/api/admin/invitations/${inv.id}`).send({ seats: 4, people });
+    expect(deactivate.status).toBe(409);
+    expect(deactivate.body.error).toBe('person_in_response');
+    const drop = await admin.put(`/api/admin/invitations/${inv.id}`).send({ seats: 4, people: people.slice(1) });
+    expect(drop.body.error).toBe('people_missing');
+    const rename = await admin.put(`/api/admin/invitations/${inv.id}`).send({ code: 'OTRO' });
+    expect(rename.body.error).toBe('code_immutable');
+    // Una persona nueva recibe un ID estable propio.
+    const add = await admin.put(`/api/admin/invitations/${inv.id}`).send({ seats: 4, people: [...inv.people, { name: 'Quinta Persona' }] });
+    expect(add.status).toBe(200);
+    expect(add.body.people.at(-1)).toMatchObject({ id: 'G-1-P5', name: 'Quinta Persona', active: true });
   });
 
-  it('no permite bajar los lugares por debajo de los adultos ya confirmados', async () => {
-    const { app } = makeApp();
-    const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'T-8', name: 'Familia Reducción', seats: 4 });
-    await request(app).put(`/api/invitations/${inv.token}/rsvp`).send({ status: 'attending', adults: 3 }).expect(200);
-    const res = await admin.put(`/api/admin/invitations/${inv.id}`).send({ code: 'T-8', name: 'Familia Reducción', seats: 2 });
-    expect(res.status).toBe(409);
-  });
-
-  it('las escrituras repetidas sobre el mismo archivo con dos conexiones no duplican', async () => {
-    const dbPath = tempDbPath('dos');
-    const a = makeApp(dbPath);
-    const admin = await adminAgent(a.app);
-    const inv = await createInv(admin, { code: 'T-9', name: 'Familia Dos Conexiones', seats: 2 });
+  it('la respuesta persiste al cerrar y reabrir la base, y dos conexiones al mismo archivo no duplican', async () => {
+    const dbPath = tempDbPath('persist');
+    const first = makeApp(dbPath);
+    const admin = await adminAgent(first.app);
+    const inv = await createInv(admin, { code: 'P-1', name: 'Familia Persistente', seats: 2, people: ['Uno', 'Dos'] });
     const db2 = openDb(dbPath);
     const app2 = createApp(db2, testConfig(dbPath));
-    await Promise.all([
-      request(a.app).put(`/api/invitations/${inv.token}/rsvp`).send({ status: 'attending', adults: 1 }),
-      request(app2).put(`/api/invitations/${inv.token}/rsvp`).send({ status: 'attending', adults: 2 }),
-    ]);
-    expect(countResponses(a.db, inv.id)).toBe(1);
+    const body = rsvpBody([inv.people[0].id, inv.people[1].id]);
+    await Promise.all([request(first.app).put(`/api/invitations/${inv.token}/rsvp`).send(body), request(app2).put(`/api/invitations/${inv.token}/rsvp`).send({ ...body, requestId: reqId() })]);
+    expect(countResponses(first.db, inv.id)).toBe(1);
+    first.db.close();
     db2.close();
+    const again = makeApp(dbPath);
+    expect((await request(again.app).get(`/api/invitations/${inv.token}`)).body.response).toMatchObject({ attending: 2 });
+    again.db.close();
   });
 });

@@ -37,6 +37,15 @@ export const CheckCircleIcon = (p: SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+export const ShareIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}>
+    <circle cx="18" cy="5.5" r="2.5" />
+    <circle cx="6" cy="12" r="2.5" />
+    <circle cx="18" cy="18.5" r="2.5" />
+    <path d="m8.2 10.8 7.6-4.1M8.2 13.2l7.6 4.1" />
+  </svg>
+);
+
 export const CalendarIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}>
     <rect x="3.5" y="5" width="17" height="15" rx="2" />

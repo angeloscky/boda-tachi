@@ -82,6 +82,42 @@ const MIGRATIONS: { version: number; name: string; sql: string }[] = [
       CREATE UNIQUE INDEX idx_invitations_code_nocase ON invitations(code COLLATE NOCASE);
     `,
   },
+  {
+    version: 3,
+    name: 'personas-autorizadas',
+    sql: `
+      -- BODA-003-R02: esta base es solo la demostración local. El registro principal será Google Sheets.
+      ALTER TABLE invitations ADD COLUMN side TEXT CHECK (side IS NULL OR side IN ('novia', 'novio', 'ambos'));
+      ALTER TABLE invitations ADD COLUMN contact TEXT;
+      ALTER TABLE invitations ADD COLUMN token_revoked_at TEXT;   -- enlace revocado: deja de funcionar hasta generar otro
+      -- Los enlaces locales llevan el prefijo demo_ para que nunca pasen por enlaces reales.
+      UPDATE invitations SET token = 'demo_' || token WHERE substr(token, 1, 5) <> 'demo_';
+      UPDATE invitations SET is_demo = 1;
+
+      -- Personas autorizadas de cada invitación, con ID estable.
+      CREATE TABLE people (
+        id            INTEGER PRIMARY KEY,
+        invitation_id INTEGER NOT NULL REFERENCES invitations(id) ON DELETE CASCADE,
+        code          TEXT NOT NULL,                     -- id_persona
+        name          TEXT NOT NULL,
+        active        INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+        position      INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX idx_people_code_nocase ON people(code COLLATE NOCASE);
+      CREATE INDEX idx_people_invitation ON people(invitation_id, position);
+
+      -- La respuesta guarda a quiénes se seleccionó; "adults" queda como el conteo derivado.
+      ALTER TABLE responses ADD COLUMN person_ids TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE responses ADD COLUMN request_id TEXT;
+      ALTER TABLE response_history ADD COLUMN person_ids TEXT;
+      ALTER TABLE response_history ADD COLUMN revision INTEGER;
+      ALTER TABLE response_history ADD COLUMN request_id TEXT;
+      -- Las respuestas numéricas anteriores (sin nombres) no se pueden asignar a personas.
+      DELETE FROM responses WHERE status = 'attending' AND person_ids = '[]';
+    `,
+  },
 ];
 
 export const now = () => new Date().toISOString();
@@ -126,15 +162,6 @@ export function tx<T>(db: DB, fn: () => T): T {
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
-  }
-}
-
-/** Si cambió la contraseña del panel, cierra todas las sesiones abiertas. */
-export function syncAdminCredential(db: DB, fingerprint: string) {
-  const stored = getSetting(db, 'admin_credential');
-  if (stored !== fingerprint) {
-    db.prepare('DELETE FROM admin_sessions').run();
-    setSetting(db, 'admin_credential', fingerprint);
   }
 }
 

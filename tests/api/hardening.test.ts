@@ -1,48 +1,60 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { adminAgent, createInv, makeApp, tempDbPath, testConfig } from './helpers.js';
+import { adminAgent, createInv, makeApp, rsvpBody, tempDbPath, testConfig } from './helpers.js';
 import { openDb } from '../../server/db.js';
 import { createApp } from '../../server/app.js';
 import { hashPassword } from '../../server/auth.js';
 import { loadConfig } from '../../server/config.js';
 
+const INV_HEADER = 'id_invitacion,lado,grupo,contacto_principal,telefono,cupo,activa,notas';
+
 describe('endurecimiento tras la revisión de seguridad', () => {
   it('los identificadores no distinguen mayúsculas (alta e importación)', async () => {
     const { app, db } = makeApp();
     const admin = await adminAgent(app);
-    await createInv(admin, { code: 'FAM-001', name: 'Familia Uno', seats: 2 });
-    const dup = await admin.post('/api/admin/invitations').send({ code: 'fam-001', name: 'Otra', seats: 1 });
+    await createInv(admin, { code: 'FAM-001', name: 'Familia Uno', seats: 2, people: ['Ana Uno', 'Beto Uno'] });
+    const dup = await admin.post('/api/admin/invitations').send({ code: 'fam-001', name: 'Otra', seats: 1, people: [] });
     expect(dup.status).toBe(409);
-    const prev = await admin.post('/api/admin/import/preview').send({ csv: 'identificador,nombre,lugares_adultos\nFam-001,Familia Uno,3' });
+    const invitations = `${INV_HEADER}\nFam-001,novia,Familia Uno,,,3,sí,`;
+    const prev = await admin.post('/api/admin/import/preview').send({ invitations });
+    expect(prev.status).toBe(200);
     expect(prev.body.rows[0].action).toBe('update');
-    await admin.post('/api/admin/import/apply').send({ csv: 'identificador,nombre,lugares_adultos\nFam-001,Familia Uno,3' }).expect(200);
+    await admin.post('/api/admin/import/apply').send({ invitations }).expect(200);
     const rows = db.prepare('SELECT code, seats FROM invitations').all() as { code: string; seats: number }[];
     expect(rows).toEqual([{ code: 'FAM-001', seats: 3 }]);
+    // Una persona con el mismo ID en otras mayúsculas actualiza, no duplica.
+    const people = 'id_persona,id_invitacion,nombre,activa\nfam-001-p1,FAM-001,Ana Uno,sí';
+    const pp = await admin.post('/api/admin/import/preview').send({ people });
+    expect(pp.body.rows[0].action).toBe('unchanged');
+    await admin.post('/api/admin/import/apply').send({ people }).expect(200);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n).toBe(2);
   });
 
   it('importar sin columna de teléfono conserva los teléfonos y avisa qué cambia', async () => {
     const { app, db } = makeApp();
     const admin = await adminAgent(app);
-    await createInv(admin, { code: 'P-1', name: 'Familia Tel', seats: 2, phone: '3312345678' });
-    const csv = 'identificador,nombre,lugares_adultos\nP-1,Familia Tel,4';
-    const prev = await admin.post('/api/admin/import/preview').send({ csv });
-    expect(prev.body.rows[0].warnings[0]).toMatch(/lugares 2 → 4/);
+    await createInv(admin, { code: 'P-1', name: 'Familia Tel', seats: 2, phone: '3312345678', people: ['Uno Tel', 'Dos Tel'] });
+    const invitations = 'id_invitacion,grupo,cupo\nP-1,Familia Tel,4';
+    const prev = await admin.post('/api/admin/import/preview').send({ invitations });
+    expect(prev.body.rows[0].warnings[0]).toMatch(/cupo 2 → 4/);
     expect(prev.body.rows[0].warnings[0]).not.toMatch(/teléfono/);
-    await admin.post('/api/admin/import/apply').send({ csv }).expect(200);
+    await admin.post('/api/admin/import/apply').send({ invitations }).expect(200);
     expect((db.prepare("SELECT phone FROM invitations WHERE code = 'P-1'").get() as { phone: string }).phone).toBe('523312345678');
   });
 
   it('rechaza orígenes nulos o mal formados con 403 y cuerpos grandes con 413', async () => {
     const { app } = makeApp();
     const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'O-1', name: 'Familia Origen', seats: 1 });
+    const inv = await createInv(admin, { code: 'O-1', name: 'Familia Origen', seats: 1, people: ['Olga Origen'] });
     for (const origin of ['null', '::::', 'https://otro.example']) {
-      const r = await request(app).put(`/api/invitations/${inv.token}/rsvp`).set('Origin', origin).send({ status: 'declined', adults: 0 });
+      const r = await request(app).put(`/api/invitations/${inv.token}/rsvp`).set('Origin', origin).send(rsvpBody([]));
       expect(r.status, origin).toBe(403);
     }
-    const ok = await request(app).put(`/api/invitations/${inv.token}/rsvp`).set('Origin', 'https://boda.example').send({ status: 'declined', adults: 0 });
+    const ok = await request(app).put(`/api/invitations/${inv.token}/rsvp`).set('Origin', 'https://boda.example').send(rsvpBody([]));
     expect(ok.status).toBe(200);
-    const big = await request(app).put(`/api/invitations/${inv.token}/rsvp`).send({ status: 'declined', adults: 0, pad: 'x'.repeat(40_000) });
+    const big = await request(app)
+      .put(`/api/invitations/${inv.token}/rsvp`)
+      .send({ ...rsvpBody([], { expectedRevision: 1 }), pad: 'x'.repeat(40_000) });
     expect(big.status).toBe(413);
   });
 
@@ -53,7 +65,7 @@ describe('endurecimiento tras la revisión de seguridad', () => {
     expect(r.status).toBe(429);
   });
 
-  it('cambiar la contraseña cierra las sesiones existentes', async () => {
+  it('cambiar la contraseña (reiniciar con otra) invalida las sesiones existentes', async () => {
     const dbPath = tempDbPath('rotacion');
     const db = openDb(dbPath);
     const app1 = createApp(db, { ...testConfig(dbPath), adminPasswordPlain: null, adminPasswordHash: hashPassword('primera-clave-123') });

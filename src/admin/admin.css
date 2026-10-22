@@ -608,3 +608,100 @@
 .adm-toast:empty {
   display: none;
 }
+
+/* ---------- BODA-003-R02: personas, menús y estado del registro ---------- */
+.adm-people {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px 14px;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.adm-people legend {
+  font-size: 13px;
+  color: var(--ivory-dim);
+  padding: 0 6px;
+}
+.adm-person {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  align-items: center;
+}
+.adm-person.is-off input:not([type='checkbox']) {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+.adm-person-active {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ivory-dim);
+  white-space: nowrap;
+}
+.adm-person-id {
+  grid-column: 1 / -1;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--ivory-dim);
+  opacity: 0.8;
+}
+.adm-help {
+  font-size: 12px;
+  color: var(--ivory-dim);
+}
+.adm-people > .adm-btn {
+  justify-self: start;
+}
+.adm-checks-col {
+  flex-direction: column;
+  gap: 8px;
+}
+.adm-menu {
+  position: relative;
+}
+.adm-menu > summary {
+  list-style: none;
+}
+.adm-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.adm-menu-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 240px;
+  display: grid;
+  background: var(--charcoal);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+.adm-menu-list a {
+  padding: 10px 12px;
+  border-radius: 8px;
+  text-decoration: none;
+}
+.adm-menu-list a:hover,
+.adm-menu-list a:focus-visible {
+  background: var(--charcoal-2);
+}
+.adm-issues {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+}
+.adm-backend {
+  display: grid;
+  gap: 14px;
+  max-width: 860px;
+}
+.adm-backend > .adm-btn {
+  justify-self: start;
+}
