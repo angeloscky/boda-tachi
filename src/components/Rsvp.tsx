@@ -38,10 +38,10 @@ function seatsText(inv: PublicInvitation) {
 }
 
 /** Enfoca un encabezado y lo deja a media pantalla (lejos del aviso superior y de la barra inferior). */
-function focusInView(el: HTMLElement | null) {
+function focusInView(el: HTMLElement | null, block: ScrollLogicalPosition = 'center') {
   if (!el) return;
   el.focus({ preventScroll: true });
-  el.scrollIntoView({ block: 'center' });
+  el.scrollIntoView({ block });
 }
 
 /** Rechazos que indican que la invitación cambió (cupo, personas o cierre): se vuelve a cargar. */
@@ -156,7 +156,8 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
   const focusNext = useRef<'heading' | 'saved' | null>(null);
 
   useEffect(() => {
-    if (step === 'review' && !error && !conflict) focusInView(reviewRef.current);
+    // Arriba de la pantalla: así el botón de guardar queda a la vista también en teléfonos pequeños.
+    if (step === 'review' && !error && !conflict) focusInView(reviewRef.current, 'start');
   }, [step, error, conflict]);
   useEffect(() => {
     if (error || conflict) alertRef.current?.focus();
@@ -322,7 +323,8 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
           setNotice(`${err.message} Revisa tu selección.`);
           setStep('select');
           if (!fresh.canRespond) setEditing(false);
-          focusNext.current = fresh.canRespond ? 'heading' : 'saved';
+          // Sin poder responder: la vista guardada si ya había respuesta; si no, el aviso de cierre (con su encabezado).
+          focusNext.current = !fresh.canRespond && fresh.response ? 'saved' : 'heading';
         } catch {
           setError({ message: err.message, uncertain: false });
         }
@@ -341,7 +343,7 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
 
   if (step === 'review') {
     const names = draft.none ? [] : namesOf(invitation, draft.ids);
-    const unused = draft.none ? seats : seats - draft.ids.length;
+    const unused = draft.none ? 0 : reservedOf(invitation) - draft.ids.length;
     return (
       <div className="rsvp-card" data-testid="rsvp-review">
         {header}
@@ -356,7 +358,7 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
             ))}
           </ul>
         ) : null}
-        {unused > 0 && !draft.none ? <p className="muted small">Los lugares que no se usen no pueden transferirse a otras personas.</p> : null}
+        {unused > 0 ? <p className="muted small">Los lugares que no se usen no pueden transferirse a otras personas.</p> : null}
 
         {conflict ? (
           <div className="alert alert-error" role="alert" ref={alertRef} tabIndex={-1} data-testid="rsvp-conflict">

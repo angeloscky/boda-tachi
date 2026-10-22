@@ -67,13 +67,16 @@ interface ScriptInvitation {
   people: PersonRecord[];
   response: ResponseRecord | null;
   rsvpOpen: boolean;
+  /** Revisión desde la que sigue una invitación sin respuesta (si se borró la fila a mano). */
+  baseRevision?: number;
 }
 
 function viewFrom(result: ScriptInvitation): PublicInvitation {
   if (!result || !result.invitation || !Array.isArray(result.people)) {
     throw new ConnectorError('bad_result', 'Apps Script devolvió un resultado incompleto.', true);
   }
-  return { ...toGuestView(result.invitation, result.people, result.response, result.rsvpOpen === true), mode: 'live' };
+  const base = typeof result.baseRevision === 'number' && Number.isInteger(result.baseRevision) && result.baseRevision >= 0 ? result.baseRevision : 0;
+  return { ...toGuestView(result.invitation, result.people, result.response, result.rsvpOpen === true, base), mode: 'live' };
 }
 
 export function createSheetsStore(client: SheetsClient, log: (msg: string) => void = console.error): GuestStore {

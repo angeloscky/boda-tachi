@@ -26,6 +26,9 @@ const server = app.listen(config.port, () => {
   } else if (!config.adminPasswordHash) {
     console.warn('Aviso: usando ADMIN_PASSWORD en texto plano; en producción usa ADMIN_PASSWORD_HASH.');
   }
+  if (config.production && !config.publicBaseUrl.startsWith('https://')) {
+    console.warn('Aviso: PUBLIC_BASE_URL no usa https://; los enlaces viajarían sin cifrar y las cookies del panel no se marcan como seguras.');
+  }
 });
 
 function shutdown() {

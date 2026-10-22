@@ -18,7 +18,7 @@ Invitación web para el 22 de mayo de 2027 (Zapopan, Jalisco). Hay un **enlace g
 | *(vacío)* — sin registro | "La confirmación en línea todavía no está habilitada". No hay formulario ni éxitos simulados. | Ninguno. Nunca cae a la demostración. |
 | `demo` | Aviso "Demostración local con familias ficticias". Las respuestas se guardan como respuestas de prueba. | SQLite (`DB_PATH`), enlaces `demo_…` que nunca sirven en el registro real. |
 | `sheets` | Confirmación normal. Éxito solo cuando Apps Script confirma la escritura. | Hoja privada de Google. Conexión pendiente. |
-| Vista estática (`VITE_STATIC_DEMO=1`) | Diseño y formulario; al guardar dice que la respuesta **no** se registró. | Ninguno. |
+| Vista estática (`npm run build:static`) | Diseño y formulario con una familia ficticia; al guardar dice que la respuesta **no** se registró. | Ninguno. |
 
 ## Probar la demostración
 
@@ -78,7 +78,7 @@ Los lugares que una familia no use quedan a decisión de los novios: no se reasi
 | `SHEETS_WEBAPP_URL` | Solo `sheets`: URL `/exec` de la implementación de Apps Script. |
 | `SHEETS_SHARED_SECRET` | Solo `sheets`: secreto compartido con el script (≥ 32 caracteres). Vive en el servidor, nunca en el navegador. |
 | `SHEETS_TIMEOUT_MS` | Solo `sheets`: tiempo máximo por llamada (15000 por defecto). |
-| `ADMIN_PASSWORD_HASH` | Hash scrypt de la contraseña del panel (`npm run admin:hash`). Las sesiones viven en memoria: reiniciar o cambiar la contraseña las cierra. Tras 30 intentos fallidos en una hora (de cualquier IP) el acceso se bloquea una hora, también con la contraseña correcta. |
+| `ADMIN_PASSWORD_HASH` | Hash scrypt de la contraseña del panel (`npm run admin:hash`). Las sesiones viven en memoria: reiniciar o cambiar la contraseña las cierra. Tras 30 intentos fallidos en una hora (de cualquier IP) el acceso se bloquea una hora, también con la contraseña correcta: así no se puede adivinar la contraseña desde muchas IP, a cambio de que alguien pueda mantener el panel bloqueado a propósito. El contador vive en memoria: reiniciar el servicio lo limpia. En modo Sheets la lista se administra en la hoja (con la cuenta de Google), así que el bloqueo solo afecta al panel de estado. |
 | `DEMO_IN_PRODUCTION` | Con `NODE_ENV=production`, la demostración solo arranca si vale `1` (para publicar una demostración a propósito). En producción también es obligatorio `PUBLIC_BASE_URL`. |
 | `TRUST_PROXY` | Número de proxies delante del servidor (0 si se expone directo). Necesario para limitar intentos por IP real. |
 | `PORT`, `COOKIE_SECURE`, `MESSAGING_PROVIDER` | Puerto (3000), cookies solo HTTPS (automático con `https://`), mensajes (`simulation`, no envía nada). |
@@ -103,9 +103,9 @@ El panel de la demostración prepara para cada invitación: destinatario, teléf
 
 ```bash
 npm run typecheck     # interfaz, servidor, pruebas y scripts
-npm test              # 62 pruebas de reglas, API, modos y Apps Script con dobles (Vitest + Supertest)
+npm test              # 75 pruebas de reglas, API, modos y Apps Script con dobles (Vitest + Supertest)
 npm run build
-npm run test:e2e      # 26 recorridos en navegador, móvil y escritorio (Playwright)
+npm run test:e2e      # 36 recorridos en navegador: 18 en móvil y 18 en escritorio (Playwright)
 ```
 
 En otro equipo, la primera vez: `npx playwright install chromium`. Las pruebas usan bases temporales y datos ficticios; no envían mensajes, no visitan Google Maps ni Liverpool, y no se conectan a Google: el script se ejecuta con dobles de `SpreadsheetApp`, `LockService` y la redirección de Google (`tests/api/fake-gas.ts`). Esos dobles no acreditan una conexión real.
@@ -116,7 +116,7 @@ En otro equipo, la primera vez: `npx playwright install chromium`. Las pruebas u
 
 Pendiente: no se creó ninguna cuenta de alojamiento. En modo `sheets` el servidor no guarda datos (las sesiones del panel viven en memoria), así que basta un alojamiento Node gratuito sin disco persistente; los planes gratuitos suelen dormir el servicio tras inactividad, y la primera visita tarda unos segundos más. Revisa las condiciones vigentes del plan antes de elegir. El `Dockerfile` sigue funcionando como contenedor sin estado; el volumen solo hace falta para la demostración.
 
-Un hosting de archivos estáticos solo sirve para la vista de diseño (`VITE_STATIC_DEMO=1`), que nunca registra respuestas.
+Un hosting de archivos estáticos solo sirve para la vista de diseño (`npm run build:static`, sale en `dist/static-demo/`), que nunca registra respuestas.
 
 ## Logo
 

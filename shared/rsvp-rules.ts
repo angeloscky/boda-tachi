@@ -281,11 +281,23 @@ export interface RowResult<T> {
   value: T;
   errors: string[];
   warnings: string[];
+  /**
+   * Solo invitaciones: los errores que impiden atenderla (ID, grupo, cupo, activa, token).
+   * Un teléfono, lado, contacto o notas mal capturados se reportan, pero no dejan a la familia sin confirmar.
+   */
+  blocking?: string[];
 }
+
+export const ACTIVE_ERROR = 'La columna "activa" debe ser sí o no.';
 
 export function parseInvitationRow(raw: Record<string, unknown>): RowResult<InvitationRecord> {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const blocking: string[] = [];
+  const block = (msg: string) => {
+    errors.push(msg);
+    blocking.push(msg);
+  };
   const id = text(raw.id);
   const group = text(raw.group).replace(/\s+/g, ' ');
   const contact = text(raw.contact).replace(/\s+/g, ' ');
@@ -293,10 +305,10 @@ export function parseInvitationRow(raw: Record<string, unknown>): RowResult<Invi
   const phoneRaw = text(raw.phone);
   const notes = text(raw.notes);
   const tokenRaw = text(raw.token);
-  if (!id) errors.push('Falta el ID de la invitación.');
-  else if (!ID_RE.test(id)) errors.push('El ID solo admite letras, números, "-" y "_" (máximo 40).');
-  if (!group) errors.push('Falta el nombre del grupo.');
-  else if (group.length > 120) errors.push('El nombre del grupo es demasiado largo (máximo 120 caracteres).');
+  if (!id) block('Falta el ID de la invitación.');
+  else if (!ID_RE.test(id)) block('El ID solo admite letras, números, "-" y "_" (máximo 40).');
+  if (!group) block('Falta el nombre del grupo.');
+  else if (group.length > 120) block('El nombre del grupo es demasiado largo (máximo 120 caracteres).');
   if (contact.length > 120) errors.push('El contacto principal es demasiado largo (máximo 120 caracteres).');
   let side: Side | null = null;
   if (sideRaw) {
@@ -313,20 +325,21 @@ export function parseInvitationRow(raw: Record<string, unknown>): RowResult<Invi
   if (!seatsText) warnings.push('Sin cupo asignado: no podrá confirmar hasta asignarlo.');
   else {
     const n = typeof raw.seats === 'number' ? raw.seats : Number(seatsText);
-    if (!Number.isInteger(n)) errors.push('El cupo debe ser un número entero.');
-    else if (n < 1 || n > MAX_SEATS) errors.push(`El cupo debe estar entre 1 y ${MAX_SEATS}.`);
+    if (!Number.isInteger(n)) block('El cupo debe ser un número entero.');
+    else if (n < 1 || n > MAX_SEATS) block(`El cupo debe estar entre 1 y ${MAX_SEATS}.`);
     else seats = n;
   }
   const active = parseBool(raw.active, true);
-  if (active === null) errors.push('La columna "activa" debe ser sí o no.');
+  if (active === null) block(ACTIVE_ERROR);
   const revoked = tokenRaw.toLowerCase() === REVOKED_TOKEN;
-  if (tokenRaw && !revoked && !LIVE_TOKEN_RE.test(tokenRaw) && !DEMO_TOKEN_RE.test(tokenRaw)) errors.push('El token no tiene el formato esperado.');
+  if (tokenRaw && !revoked && !LIVE_TOKEN_RE.test(tokenRaw) && !DEMO_TOKEN_RE.test(tokenRaw)) block('El token no tiene el formato esperado.');
   if (notes.length > 500) errors.push('Las notas son demasiado largas (máximo 500 caracteres).');
   return {
     // Un valor de "activa" no reconocido cuenta como inactiva (y se reporta como error).
     value: { id, group, side, contact: contact || null, phone, seats, active: active === true, token: revoked ? null : tokenRaw || null, notes: notes || null, revoked },
     errors,
     warnings,
+    blocking,
   };
 }
 
@@ -341,7 +354,7 @@ export function parsePersonRow(raw: Record<string, unknown>): RowResult<PersonRe
   if (!name) errors.push('Falta el nombre autorizado.');
   else if (name.length > 120) errors.push('El nombre es demasiado largo (máximo 120 caracteres).');
   const active = parseBool(raw.active, true);
-  if (active === null) errors.push('La columna "activa" debe ser sí o no.');
+  if (active === null) errors.push(ACTIVE_ERROR);
   return { value: { id, invitationId, name, active: active === true }, errors, warnings: [] };
 }
 
@@ -513,7 +526,8 @@ interface SheetRows {
 export function invitationBlockers(target: RowResult<InvitationRecord>, rows: SheetRows): string[] {
   const out: string[] = [];
   const id = key(target.value.id);
-  if (target.errors.length) out.push(`Invitación ${target.value.id}: ${target.errors.join(' ')}`);
+  const targetErrors = target.blocking ?? target.errors;
+  if (targetErrors.length) out.push(`Invitación ${target.value.id}: ${targetErrors.join(' ')}`);
   if (rows.invitations.filter((r) => key(r.value.id) === id).length > 1) out.push(`ID de invitación repetido: ${target.value.id}.`);
   const own = rows.people.filter((r) => key(r.value.invitationId) === id);
   for (const p of own) {

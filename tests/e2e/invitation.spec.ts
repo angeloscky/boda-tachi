@@ -404,6 +404,15 @@ test('administración: inaccesible sin sesión; lista, edición con personas y m
   await expect(row).toContainText('4 / 4');
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-09-admin-lista.png`, fullPage: true });
 
+  // Menús de descarga: solo uno abierto a la vez; Escape lo cierra.
+  await page.locator('summary', { hasText: 'Exportar' }).click();
+  await expect(page.getByRole('link', { name: 'Mensajes (enlaces de demostración)' })).toBeVisible();
+  await page.locator('summary', { hasText: 'Plantillas' }).click();
+  await expect(page.getByRole('link', { name: 'Mensajes (enlaces de demostración)' })).toBeHidden();
+  await expect(page.getByRole('group', { name: 'Plantillas' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('group', { name: 'Plantillas' })).toBeHidden();
+
   await row.getByRole('button', { name: 'Editar Familia Panel Admin' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('Nombre de la persona 1')).toHaveValue('Adela Panel');
@@ -455,6 +464,15 @@ test('seleccionar a todos, cancelar un cambio y textos en singular', async ({ pa
   await page.getByRole('checkbox', { name: 'No podré asistir' }).check();
   await toReview(page);
   await expect(page.getByTestId('rsvp-review')).toContainText('No podrás asistir.');
+
+  // Cupo mayor que personas: los lugares se cuentan hasta las personas y no hay aviso de lugares sin usar.
+  const pair = await seedInvitation(request, 'Familia Pareja Demo', 4, ['Paz Pareja', 'Pío Pareja']);
+  await page.goto(`/i/${pair.token}#confirmar`);
+  await expect(page.getByTestId('rsvp-form')).toContainText('Hemos reservado 2 lugares para ustedes.');
+  await page.getByRole('button', { name: 'Seleccionar a todos' }).click();
+  await toReview(page);
+  await expect(page.getByTestId('rsvp-review')).toContainText('Asistirán 2 personas de 2 lugares reservados.');
+  await expect(page.getByTestId('rsvp-review')).not.toContainText('Los lugares que no se usen');
 });
 
 test('(6) conservar la respuesta vigente tras un conflicto no guarda la selección propia', async ({ page, request }) => {
@@ -503,9 +521,16 @@ test('confirmaciones cerradas: se ve la respuesta, pero no se puede cambiar', as
   await request.put(`/api/invitations/${answered.token}/rsvp`, {
     data: { status: 'attending', personIds: [answered.people[1].id], expectedRevision: 0, requestId: 'cierre-0001' },
   });
+  // Primera respuesta en revisión cuando se cierran las confirmaciones: el foco queda en el encabezado del aviso.
+  await page.goto(`/i/${pending.token}#confirmar`);
+  await person(page, 'Cleo Cierre').check();
+  await toReview(page);
   await adminLogin(request);
   expect((await request.put('/api/admin/settings', { data: { rsvpOpen: false } })).status()).toBe(200);
   try {
+    await confirmSave(page);
+    await expect(page.getByText('La confirmación de asistencia ya está cerrada. Si necesitas hacer un cambio, escríbenos directamente.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Familia Cierre Pendiente', exact: true })).toBeFocused();
     await page.goto(`/i/${answered.token}#confirmar`);
     const saved = page.getByTestId('rsvp-saved');
     await expect(saved).toContainText('Asistirá 1 persona de 2 lugares reservados.');
@@ -520,4 +545,15 @@ test('confirmaciones cerradas: se ve la respuesta, pero no se puede cambiar', as
     await adminLogin(request);
     await request.put('/api/admin/settings', { data: { rsvpOpen: true } });
   }
+});
+
+test('si la invitación no carga, "Reintentar" deja el foco en la sección y luego muestra el formulario', async ({ page, request }) => {
+  const inv = await seedInvitation(request, 'Familia Reintento Demo', 1, ['Rocío Reintento']);
+  await page.route('**/api/invitations/*', (r) => r.abort('internetdisconnected'));
+  await page.goto(`/i/${inv.token}#confirmar`);
+  await expect(page.getByRole('alert')).toContainText('No pudimos cargar tu invitación');
+  await page.unroute('**/api/invitations/*');
+  await page.getByRole('button', { name: 'Reintentar' }).click();
+  await expect(page.getByTestId('rsvp-form')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '¿Nos acompañas?' })).toBeFocused();
 });

@@ -115,6 +115,16 @@ describe('reglas de confirmación (compartidas con Apps Script)', () => {
     expect(parseInvitationRow({ id: 'F1', group: 'Familia', seats: 2, active: 'quizá' }).value.active).toBe(false);
   });
 
+  it('un teléfono, lado o notas mal capturados se reportan pero no bloquean la invitación', () => {
+    const row = parseInvitationRow({ id: 'INV-1', group: 'A', side: 'tía', phone: '123', seats: '2', active: 'sí', token: '' });
+    expect(row.errors).toHaveLength(2);
+    expect(row.blocking).toEqual([]);
+    expect(invitationBlockers(row, { invitations: [row], people: [], responses: [] })).toEqual([]);
+    const bad = parseInvitationRow({ id: 'INV-2', group: 'B', seats: 'dos', active: 'quizá', token: '' });
+    expect(bad.blocking).toHaveLength(2);
+    expect(invitationBlockers(bad, { invitations: [bad], people: [], responses: [] })).toHaveLength(1);
+  });
+
   it('en la hoja, una invitación con ID repetido, personas compartidas o respuesta inválida no se atiende', () => {
     const inv = (id: string) => parseInvitationRow({ id, group: 'Familia', seats: 2, active: 'sí' });
     const person = (id: string, invitationId: string, active = 'sí') => parsePersonRow({ id, invitationId, name: 'Nombre', active });

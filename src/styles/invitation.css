@@ -1037,6 +1037,7 @@ a {
   margin-top: 14px;
 }
 /* Encabezados que reciben el foco por programa (tras guardar, cambiar o cancelar). */
+#confirmar h2[tabindex='-1']:focus:not(:focus-visible),
 .rsvp-card h3[tabindex='-1']:focus:not(:focus-visible),
 .rsvp-card h4[tabindex='-1']:focus:not(:focus-visible) {
   outline: none;

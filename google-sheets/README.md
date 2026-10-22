@@ -13,7 +13,8 @@ invitado (navegador) → servidor de la invitación (/api) → POST firmado → 
 - El script solo acepta cuatro operaciones: `ping`, `getInvitation`, `saveResponse` y `summary`. No hay lectura ni escritura de rangos arbitrarios.
 - Cada respuesta del script va firmada y repite la operación y el nonce. El servidor sigue a mano la redirección de Google (`script.google.com` → `script.googleusercontent.com`, y ningún otro dominio), exige JSON y verifica la firma. Una página de inicio de sesión, un HTML, una firma que no cuadra o un tiempo agotado se tratan como error: el invitado ve "no se registró; inténtalo de nuevo", nunca un éxito.
 - `saveResponse` lee, valida con las mismas reglas del servidor (`shared/rsvp-rules.ts`, empaquetadas en `Code.gs`) y escribe bajo `LockService`. Antes de escribir comprueba que la fila sigue siendo la de esa invitación; después hace `flush()` y vuelve a leer la fila, y solo si coincide responde éxito. Bloqueo ocupado o escritura fallida = error reintentable. Tras un tiempo agotado el invitado ve "no pudimos comprobar que se guardara; inténtalo de nuevo" (reintentar no duplica).
-- Como la hoja se edita a mano, antes de mostrar o guardar una invitación el script exige que su fila sea válida, que su `id_invitacion` no esté repetido (sin importar mayúsculas), que sus personas sean válidas y no aparezcan en otra invitación, y que tenga a lo sumo una respuesta válida. Si algo falla, la familia ve "Tu invitación tiene un detalle pendiente de revisar. Escríbenos" y no se lee ni escribe nada; el detalle aparece en **Revisar la lista** y en el panel.
+- Como la hoja se edita a mano, antes de mostrar o guardar una invitación el script exige que su ID, grupo, cupo, `activa` y token sean válidos, que su `id_invitacion` no esté repetido (sin importar mayúsculas), que sus personas sean válidas y no aparezcan en otra invitación, y que tenga a lo sumo una respuesta válida. Si algo falla, la familia ve "Tu invitación tiene un detalle pendiente de revisar. Escríbenos" y no se lee ni escribe nada; el detalle aparece en **Revisar la lista** y en el panel. Un teléfono, lado, contacto o notas mal capturados también aparecen ahí, pero no impiden que la familia confirme. Una invitación con `activa` = `no` responde como inexistente.
+- El script guarda en sus propiedades la última revisión escrita de cada invitación (`rev:<id>`). Si alguien borra a mano la fila de una respuesta, la siguiente revisión continúa después de esa: un teléfono con la vista anterior recibe el aviso de conflicto en lugar de sobrescribir. **Revisar la lista** también registra la revisión de las respuestas capturadas a mano.
 
 ## Estructura del archivo
 
@@ -72,6 +73,7 @@ Al cambiar el código del script: Implementar → Gestionar implementaciones →
 - [ ] Dos teléfonos guardando a la vez: uno recibe el aviso de conflicto con la respuesta vigente.
 - [ ] Con `BT_SHARED_SECRET` distinto, el invitado ve "no se registró" y nada se escribe.
 - [ ] Revocar y regenerar desde el menú invalida el enlace anterior.
+- [ ] Las propiedades del script `rev:<id>` se guardan sin pedir permisos adicionales, y borrar una fila de Respuestas hace que un teléfono atrasado reciba conflicto.
 - [ ] Tiempos de respuesta aceptables desde el alojamiento elegido (Apps Script suele tardar 1–3 s).
 
 ## Privacidad y permisos
@@ -87,7 +89,7 @@ Al cambiar el código del script: Implementar → Gestionar implementaciones →
 - Cambios de enlaces: usa siempre el menú (**Generar**, **Regenerar**, **Revocar**), que trabaja bajo el bloqueo. Revocar escribe `revocado`; **Generar enlaces faltantes** lo respeta y solo **Regenerar** le da un enlace nuevo.
 - Cambios sensibles con confirmaciones abiertas (cupo, personas, activar/desactivar, una respuesta recibida por teléfono):
   1. **Boda → Cerrar confirmaciones.** Las familias ven su respuesta pero no pueden cambiarla.
-  2. Haz el cambio. No bajes el cupo por debajo de las personas confirmadas ni desactives a alguien confirmado. Para registrar una respuesta a mano, edita la fila de esa invitación en Respuestas: `estado` exactamente `asistirá` o `no asistirá`, los IDs de persona separados por coma, `revision` + 1 y un `id_solicitud` nuevo. **No borres filas de Respuestas**: la revisión volvería a empezar y un teléfono con la vista vieja podría sobrescribir sin aviso.
+  2. Haz el cambio. No bajes el cupo por debajo de las personas confirmadas ni desactives a alguien confirmado. Para registrar una respuesta a mano, edita la fila de esa invitación en Respuestas: `estado` exactamente `asistirá` o `no asistirá`, los IDs de persona separados por coma, `revision` + 1 y un `id_solicitud` nuevo. Evita borrar filas de Respuestas: si hace falta quitar una respuesta, borra la fila con las confirmaciones cerradas y luego usa **Revisar la lista** (el script continúa la revisión después de la última escrita, así que un teléfono atrasado recibe conflicto).
   3. **Boda → Revisar la lista** y corrige lo que marque.
   4. **Boda → Abrir confirmaciones.**
 - Los lugares que una familia no use no se reasignan solos ni los puede tomar otra familia; decidir qué hacer con ellos es cosa de los novios.

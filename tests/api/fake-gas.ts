@@ -110,9 +110,9 @@ export function createGas(tabs: Record<string, unknown[][]>, opts: { secret?: st
   const props: Record<string, string | null> = { BT_SHARED_SECRET: opts.secret === undefined ? SECRET : opts.secret };
   const ss = { getSheetByName: (n: string) => sheets.get(n) ?? null, insertSheet: (n: string) => sheets.set(n, new FakeSheet(n, [])).get(n) };
   const ctx: Record<string, unknown> = {
-    SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush: () => {}, getUi: () => ({ alert: () => {} }) },
+    SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush: () => {}, getUi: () => ({ alert: () => {}, ButtonSet: { OK: 'OK' } }) },
     LockService: { getScriptLock: () => ({ tryLock: () => !lock.busy, releaseLock: () => {} }) },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: (k: string) => props[k] ?? null }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (k: string) => props[k] ?? null, setProperty: (k: string, v: string) => void (props[k] = String(v)) }) },
     CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string) => void cache.set(k, v) }) },
     Utilities: {
       Charset: { UTF_8: 'UTF-8' },

@@ -25,6 +25,43 @@ const personas = (n: number) => `${n} ${n === 1 ? 'persona' : 'personas'}`;
 const fmtPhone = (p: string | null) => (p ? (p.startsWith('52') && p.length === 12 ? `+52 ${p.slice(2, 4)} ${p.slice(4, 8)} ${p.slice(8)}` : `+${p}`) : '');
 const namesOf = (row: AdminRow, ids: string[]) => ids.map((id) => row.people.find((p) => p.id === id)?.name ?? id);
 
+/**
+ * Menú desplegable de descargas. Solo uno abierto a la vez; se cierra al tocar fuera o con Escape.
+ * En el teléfono se muestra como hoja inferior con su título.
+ */
+function AdminMenu({ label, ghost, open, onOpenChange, children }: { label: string; ghost?: boolean; open: boolean; onOpenChange: (open: boolean) => void; children: ReactNode }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onOpenChange(false);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onOpenChange(false);
+        ref.current?.querySelector('summary')?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [open, onOpenChange]);
+  return (
+    <details className="adm-menu" ref={ref} open={open} onToggle={(e) => (e.currentTarget.open !== open ? onOpenChange(e.currentTarget.open) : undefined)}>
+      <summary className={`adm-btn${ghost ? ' adm-btn-ghost' : ''}`}>{label}</summary>
+      <div className="adm-menu-list" role="group" aria-label={label}>
+        <p className="adm-menu-title" aria-hidden="true">
+          {label}
+        </p>
+        {children}
+      </div>
+    </details>
+  );
+}
+
 export default function AdminApp() {
   const [state, setState] = useState<'loading' | 'login' | 'ready' | 'unconfigured' | 'error'>('loading');
   useEffect(() => {
@@ -190,6 +227,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmToggle, setConfirmToggle] = useState(false);
+  const [menu, setMenu] = useState<'export' | 'templates' | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
 
   const notify = useCallback((msg: string) => {
@@ -299,37 +337,31 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             <button className="adm-btn" onClick={() => setDialog({ kind: 'import' })}>
               Importar CSV
             </button>
-            <details className="adm-menu">
-              <summary className="adm-btn">Exportar</summary>
-              <div className="adm-menu-list">
-                <a href="/api/admin/export/invitaciones.csv" download>
-                  Invitaciones.csv
-                </a>
-                <a href="/api/admin/export/personas.csv" download>
-                  Personas.csv
-                </a>
-                <a href="/api/admin/export/respuestas.csv" download>
-                  Respuestas.csv
-                </a>
-                <a href="/api/admin/messages.csv" download>
-                  Mensajes (enlaces de demostración)
-                </a>
-              </div>
-            </details>
-            <details className="adm-menu">
-              <summary className="adm-btn adm-btn-ghost">Plantillas</summary>
-              <div className="adm-menu-list">
-                <a href="/api/admin/templates/invitaciones.csv" download>
-                  Invitaciones.csv
-                </a>
-                <a href="/api/admin/templates/personas.csv" download>
-                  Personas.csv
-                </a>
-                <a href="/api/admin/templates/respuestas.csv" download>
-                  Respuestas.csv
-                </a>
-              </div>
-            </details>
+            <AdminMenu label="Exportar" open={menu === 'export'} onOpenChange={(o) => setMenu(o ? 'export' : null)}>
+              <a href="/api/admin/export/invitaciones.csv" download>
+                Invitaciones.csv
+              </a>
+              <a href="/api/admin/export/personas.csv" download>
+                Personas.csv
+              </a>
+              <a href="/api/admin/export/respuestas.csv" download>
+                Respuestas.csv
+              </a>
+              <a href="/api/admin/messages.csv" download>
+                Mensajes (enlaces de demostración)
+              </a>
+            </AdminMenu>
+            <AdminMenu label="Plantillas" ghost open={menu === 'templates'} onOpenChange={(o) => setMenu(o ? 'templates' : null)}>
+              <a href="/api/admin/templates/invitaciones.csv" download>
+                Invitaciones.csv
+              </a>
+              <a href="/api/admin/templates/personas.csv" download>
+                Personas.csv
+              </a>
+              <a href="/api/admin/templates/respuestas.csv" download>
+                Respuestas.csv
+              </a>
+            </AdminMenu>
             <a className="adm-btn adm-btn-ghost" href="/api/admin/backup" download>
               Respaldo
             </a>
@@ -376,6 +408,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                         <td data-label="Personas / cupo">
                           {active} / {r.seats ?? <span className="adm-pill adm-pill-warn">Pendiente</span>}
                           {r.seats !== null && active > r.seats ? <span className="adm-sub">más personas que cupo</span> : null}
+                          {r.seats !== null && active > 0 && active < r.seats ? <span className="adm-sub">cupo mayor que personas</span> : null}
                           {!active ? <span className="adm-sub">sin personas</span> : null}
                         </td>
                         <td data-label="Asistencia">

@@ -128,6 +128,7 @@ export default function InvitationPage({ token, staticDemo }: Props) {
   const [loading, setLoading] = useState(Boolean(token) && !staticDemo);
   const mainRef = useRef<HTMLElement>(null);
   const focusMainAfterOpen = useRef(false);
+  const confirmTitleRef = useRef<HTMLHeadingElement>(null);
   const countdown = useCountdown(CEREMONY_START);
   useReveal();
 
@@ -143,6 +144,11 @@ export default function InvitationPage({ token, staticDemo }: Props) {
       setLoading(false);
     }
   }, [token, staticDemo]);
+  // El botón "Reintentar" desaparece al recargar: el foco pasa al título de la sección, que sigue ahí.
+  const retryLoad = useCallback(() => {
+    confirmTitleRef.current?.focus({ preventScroll: true });
+    void load();
+  }, [load]);
 
   useEffect(() => {
     void load();
@@ -389,11 +395,11 @@ export default function InvitationPage({ token, staticDemo }: Props) {
         {/* 8 · Confirmación */}
         <section className="section" id="confirmar" aria-labelledby="t-confirmar">
           <p className="eyebrow">Confirmación de asistencia</p>
-          <h2 id="t-confirmar" className="title">
+          <h2 id="t-confirmar" className="title" ref={confirmTitleRef} tabIndex={-1}>
             ¿Nos acompañas?
           </h2>
           {invitation ? <NonTransferableNote /> : null}
-          <Rsvp token={token} invitation={invitation} loadError={loadError} loading={loading} onChanged={setInvitation} onRetryLoad={load} mode={mode} />
+          <Rsvp token={token} invitation={invitation} loadError={loadError} loading={loading} onChanged={setInvitation} onRetryLoad={retryLoad} mode={mode} />
         </section>
 
         <section className="section" id="compartir" aria-labelledby="t-compartir">

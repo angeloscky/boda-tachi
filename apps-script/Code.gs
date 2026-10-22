@@ -25,6 +25,7 @@ var BtRules = (() => {
   // apps-script/src/rules-entry.ts
   var rules_entry_exports = {};
   __export(rules_entry_exports, {
+    ACTIVE_ERROR: () => ACTIVE_ERROR,
     CONFIG_TAB: () => CONFIG_TAB,
     CONNECTOR_MAX_SKEW_MS: () => CONNECTOR_MAX_SKEW_MS,
     CONNECTOR_OPS: () => CONNECTOR_OPS,
@@ -212,9 +213,15 @@ var BtRules = (() => {
     if (["no", "false", "falso", "0", "inactiva", "inactivo"].indexOf(t) >= 0) return false;
     return null;
   }
+  var ACTIVE_ERROR = 'La columna "activa" debe ser sí o no.';
   function parseInvitationRow(raw) {
     const errors = [];
     const warnings = [];
+    const blocking = [];
+    const block = (msg) => {
+      errors.push(msg);
+      blocking.push(msg);
+    };
     const id = text(raw.id);
     const group = text(raw.group).replace(/\s+/g, " ");
     const contact = text(raw.contact).replace(/\s+/g, " ");
@@ -222,10 +229,10 @@ var BtRules = (() => {
     const phoneRaw = text(raw.phone);
     const notes = text(raw.notes);
     const tokenRaw = text(raw.token);
-    if (!id) errors.push("Falta el ID de la invitación.");
-    else if (!ID_RE.test(id)) errors.push('El ID solo admite letras, números, "-" y "_" (máximo 40).');
-    if (!group) errors.push("Falta el nombre del grupo.");
-    else if (group.length > 120) errors.push("El nombre del grupo es demasiado largo (máximo 120 caracteres).");
+    if (!id) block("Falta el ID de la invitación.");
+    else if (!ID_RE.test(id)) block('El ID solo admite letras, números, "-" y "_" (máximo 40).');
+    if (!group) block("Falta el nombre del grupo.");
+    else if (group.length > 120) block("El nombre del grupo es demasiado largo (máximo 120 caracteres).");
     if (contact.length > 120) errors.push("El contacto principal es demasiado largo (máximo 120 caracteres).");
     let side = null;
     if (sideRaw) {
@@ -242,20 +249,21 @@ var BtRules = (() => {
     if (!seatsText) warnings.push("Sin cupo asignado: no podrá confirmar hasta asignarlo.");
     else {
       const n = typeof raw.seats === "number" ? raw.seats : Number(seatsText);
-      if (!Number.isInteger(n)) errors.push("El cupo debe ser un número entero.");
-      else if (n < 1 || n > MAX_SEATS) errors.push(`El cupo debe estar entre 1 y ${MAX_SEATS}.`);
+      if (!Number.isInteger(n)) block("El cupo debe ser un número entero.");
+      else if (n < 1 || n > MAX_SEATS) block(`El cupo debe estar entre 1 y ${MAX_SEATS}.`);
       else seats = n;
     }
     const active = parseBool(raw.active, true);
-    if (active === null) errors.push('La columna "activa" debe ser sí o no.');
+    if (active === null) block(ACTIVE_ERROR);
     const revoked = tokenRaw.toLowerCase() === REVOKED_TOKEN;
-    if (tokenRaw && !revoked && !LIVE_TOKEN_RE.test(tokenRaw) && !DEMO_TOKEN_RE.test(tokenRaw)) errors.push("El token no tiene el formato esperado.");
+    if (tokenRaw && !revoked && !LIVE_TOKEN_RE.test(tokenRaw) && !DEMO_TOKEN_RE.test(tokenRaw)) block("El token no tiene el formato esperado.");
     if (notes.length > 500) errors.push("Las notas son demasiado largas (máximo 500 caracteres).");
     return {
       // Un valor de "activa" no reconocido cuenta como inactiva (y se reporta como error).
       value: { id, group, side, contact: contact || null, phone, seats, active: active === true, token: revoked ? null : tokenRaw || null, notes: notes || null, revoked },
       errors,
-      warnings
+      warnings,
+      blocking
     };
   }
   function parsePersonRow(raw) {
@@ -269,7 +277,7 @@ var BtRules = (() => {
     if (!name) errors.push("Falta el nombre autorizado.");
     else if (name.length > 120) errors.push("El nombre es demasiado largo (máximo 120 caracteres).");
     const active = parseBool(raw.active, true);
-    if (active === null) errors.push('La columna "activa" debe ser sí o no.');
+    if (active === null) errors.push(ACTIVE_ERROR);
     return { value: { id, invitationId, name, active: active === true }, errors, warnings: [] };
   }
   function sortPeopleById(people) {
@@ -391,9 +399,11 @@ var BtRules = (() => {
   }
   var REVIEW_MESSAGE = "Tu invitación tiene un detalle pendiente de revisar. Escríbenos y lo resolvemos.";
   function invitationBlockers(target, rows) {
+    var _a;
     const out = [];
     const id = key(target.value.id);
-    if (target.errors.length) out.push(`Invitación ${target.value.id}: ${target.errors.join(" ")}`);
+    const targetErrors = (_a = target.blocking) != null ? _a : target.errors;
+    if (targetErrors.length) out.push(`Invitación ${target.value.id}: ${targetErrors.join(" ")}`);
     if (rows.invitations.filter((r) => key(r.value.id) === id).length > 1) out.push(`ID de invitación repetido: ${target.value.id}.`);
     const own = rows.people.filter((r) => key(r.value.invitationId) === id);
     for (const p of own) {
@@ -695,6 +705,8 @@ function loadContext_(ss, token) {
   var inv = target.value;
   // Una fila de demostración o de ejemplo nunca se atiende como invitación real.
   if (BtRules.DEMO_ID_RE.test(inv.id)) return { error: NOT_FOUND };
+  // Desactivada a propósito ("no"): no existe para el invitado, aunque la hoja tenga otros detalles.
+  if (!inv.active && target.errors.indexOf(BtRules.ACTIVE_ERROR) < 0) return { error: NOT_FOUND };
   var peopleRows = peopleRows_(ss);
   var table = readTab_(ss, BtRules.RESPONSES_TAB);
   var responseRows = responseRows_(table);
@@ -707,7 +719,22 @@ function loadContext_(ss, token) {
   var k = inv.id.toLowerCase();
   var people = BtRules.sortPeopleById(peopleRows.map(valueOf_).filter(function (p) { return p.invitationId.toLowerCase() === k; }));
   var own = responseRows.filter(function (r) { return r.value.invitationId.toLowerCase() === k; });
-  return { inv: inv, people: people, table: table, row: own.length ? own[0].row : null, current: own.length ? own[0].value : null };
+  var current = own.length ? own[0].value : null;
+  // Si la fila de la respuesta se borró a mano, la revisión sigue después de la última escrita:
+  // un teléfono con la vista anterior recibe conflicto en vez de sobrescribir.
+  var last = revisionFloor_(inv.id);
+  var baseRevision = current ? current.revision : last ? last + 1 : 0;
+  return { inv: inv, people: people, table: table, row: own.length ? own[0].row : null, current: current, baseRevision: baseRevision };
+}
+
+/** Última revisión escrita por invitación (propiedades del script, clave rev:<id>). */
+function revisionFloor_(invitationId) {
+  return Number(PropertiesService.getScriptProperties().getProperty('rev:' + String(invitationId).toLowerCase())) || 0;
+}
+
+function raiseRevisionFloor_(invitationId, revision) {
+  if (!(revision > revisionFloor_(invitationId))) return;
+  PropertiesService.getScriptProperties().setProperty('rev:' + String(invitationId).toLowerCase(), String(revision));
 }
 
 function responsesOf_(table, invitationId) {
@@ -741,9 +768,9 @@ function activePeople_(people) {
   return people.filter(function (p) { return p.active; });
 }
 
-function guestPayload_(inv, people, response, open) {
+function guestPayload_(inv, people, response, open, baseRevision) {
   // Solo lo necesario para esta invitación: sin teléfono, notas, lado ni contacto.
-  return { invitation: { group: inv.group, seats: inv.seats }, people: activePeople_(people), response: response, rsvpOpen: open };
+  return { invitation: { group: inv.group, seats: inv.seats }, people: activePeople_(people), response: response, rsvpOpen: open, baseRevision: baseRevision || 0 };
 }
 
 // ---------------------------------------------------------------- operaciones
@@ -754,7 +781,7 @@ function getInvitation_(token) {
     var ss = ss_();
     var ctx = loadContext_(ss, token);
     if (ctx.error) return ctx.error;
-    return { ok: true, result: guestPayload_(ctx.inv, ctx.people, ctx.current, rsvpOpen_(ss)) };
+    return { ok: true, result: guestPayload_(ctx.inv, ctx.people, ctx.current, rsvpOpen_(ss), ctx.baseRevision) };
   } catch (err) {
     console.error(err);
     return { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'read_failed', message: String((err && err.message) || err), retryable: true };
@@ -778,12 +805,12 @@ function saveResponse_(token, request) {
     var current = ctx.current;
     var open = rsvpOpen_(ss);
     var decision = BtRules.decideRsvp(
-      { invitation: { id: inv.id, seats: inv.seats, active: inv.active }, people: people, current: current, rsvpOpen: open, now: nowIso_() },
+      { invitation: { id: inv.id, seats: inv.seats, active: inv.active }, people: people, current: current, rsvpOpen: open, now: nowIso_(), baseRevision: ctx.baseRevision },
       parsed.value,
     );
     if (!decision.ok) {
       if (decision.code === 'conflict') {
-        return { ok: false, status: 409, code: 'conflict', message: decision.message, current: guestPayload_(inv, people, current, open) };
+        return { ok: false, status: 409, code: 'conflict', message: decision.message, current: guestPayload_(inv, people, current, open, ctx.baseRevision) };
       }
       return { ok: false, status: decision.status, code: decision.code, message: decision.message };
     }
@@ -799,6 +826,7 @@ function saveResponse_(token, request) {
       ) {
         return { ok: false, status: 500, code: 'write_failed', message: 'No se pudo comprobar la escritura.', retryable: true };
       }
+      raiseRevisionFloor_(inv.id, decision.response.revision);
     }
     var result = guestPayload_(inv, people, decision.response, open);
     result.outcome = decision.action === 'write' ? 'saved' : decision.action;
@@ -843,8 +871,10 @@ function writeResponse_(table, rowNumber, r) {
 function allRecords_(ss) {
   var rows = { invitations: invitations_(ss), people: peopleRows_(ss), responses: responseRows_(readTab_(ss, BtRules.RESPONSES_TAB)) };
   var valid = function (p) { return !p.errors.length; };
+  // Una invitación con un detalle menor (teléfono, lado, notas) se sigue atendiendo, así que también cuenta.
+  var servable = function (p) { return !(p.blocking || p.errors).length; };
   return {
-    invitations: rows.invitations.filter(valid).map(valueOf_),
+    invitations: rows.invitations.filter(servable).map(valueOf_),
     people: rows.people.filter(valid).map(valueOf_),
     responses: rows.responses.filter(valid).map(valueOf_),
     issues: BtRules.rowIssues(rows),
@@ -1007,6 +1037,8 @@ function btCheck() {
   var all = allRecords_(ss);
   var issues = rosterIssues_(all);
   refreshSummary_(ss, all);
+  // Respuestas capturadas a mano: su revisión también cuenta como la última escrita.
+  all.responses.forEach(function (r) { raiseRevisionFloor_(r.invitationId, r.revision); });
   var text = issues.length
     ? issues.slice(0, 40).map(function (i) { return (i.severity === 'error' ? 'ERROR · ' : 'Aviso · ') + i.tab + ' ' + i.id + ': ' + i.message; }).join('\n')
     : 'Sin problemas en la lista.';

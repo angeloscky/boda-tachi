@@ -205,6 +205,49 @@ describe('conector de Google Sheets (Apps Script probado con dobles; sin conexi�
     expect(issues).toMatch(/INV-002: El estado debe ser "asistirá" o "no asistirá"/);
   });
 
+  it('borrar a mano la fila de una respuesta no reinicia la revisión: un teléfono atrasado recibe conflicto', async () => {
+    const { app, gas, responses } = sheetsApp();
+    expect((await request(app).put(`/api/invitations/${TOKEN_A}/rsvp`).send(rsvpBody(['INV-001-P1']))).body.invitation.revision).toBe(1);
+    // Alguien borra la fila en la hoja (en lugar de usar el procedimiento).
+    const tab = gas.sheets.get('Respuestas')!;
+    tab.values = tab.values.slice(0, 1);
+    const view = (await request(app).get(`/api/invitations/${TOKEN_A}`)).body;
+    expect(view).toMatchObject({ response: null, revision: 2 });
+    const b = await request(app).put(`/api/invitations/${TOKEN_A}/rsvp`).send(rsvpBody(['INV-001-P2'], { expectedRevision: 2 }));
+    expect(b.body.invitation.revision).toBe(3);
+    // El teléfono que vio la revisión 1 no sobrescribe la respuesta nueva.
+    const stale = await request(app).put(`/api/invitations/${TOKEN_A}/rsvp`).send(rsvpBody(['INV-001-P4'], { expectedRevision: 1 }));
+    expect(stale.status).toBe(409);
+    expect(stale.body.error).toBe('conflict');
+    expect(responses()).toEqual([['INV-001', 'INV-001-P2', 'asistirá', '3', expect.any(String), expect.any(String)]]);
+    // Una respuesta capturada a mano también cuenta al revisar la lista.
+    tab.values[1][3] = '7';
+    gas.fn('btCheck');
+    tab.values = tab.values.slice(0, 1);
+    expect((await request(app).get(`/api/invitations/${TOKEN_A}`)).body.revision).toBe(8);
+  });
+
+  it('un detalle menor (teléfono, lado) no bloquea a la familia; desactivada con "no" responde como inexistente', async () => {
+    const tabs = sampleTabs();
+    tabs.Invitaciones[1][4] = '123'; // teléfono mal capturado
+    tabs.Invitaciones[1][1] = 'tía'; // lado no reconocido
+    tabs.Invitaciones[2][6] = 'no'; // INV-002 desactivada…
+    tabs.Personas.push(['INV-001-P1', 'INV-002', 'Copia', 'sí']); // …y además comparte una persona con INV-001
+    tabs.Personas.splice(1, 1); // INV-001 conserva sus demás personas (P1 queda solo en INV-002)
+    const { app } = sheetsApp({ tabs });
+    const a = await request(app).get(`/api/invitations/${TOKEN_A}`);
+    expect(a.status).toBe(200);
+    expect(a.body.people.map((p: { id: string }) => p.id)).toEqual(['INV-001-P2', 'INV-001-P3', 'INV-001-P4']);
+    expect((await request(app).put(`/api/invitations/${TOKEN_A}/rsvp`).send(rsvpBody(['INV-001-P2']))).status).toBe(200);
+    expect((await request(app).get(`/api/invitations/${TOKEN_B}`)).status).toBe(404);
+    const admin = await adminAgent(app);
+    const status = (await admin.get('/api/admin/backend')).body;
+    const issues = status.issues.map((i: { id: string; message: string }) => `${i.id}: ${i.message}`).join('\n');
+    expect(issues).toMatch(/INV-001: El teléfono "123" no es válido/);
+    expect(issues).toMatch(/INV-001: El lado "tía" no es válido/);
+    expect(status.summary).toMatchObject({ attending: 1 }); // la familia con un detalle menor sí cuenta
+  });
+
   it('la escritura no pisa una fila de Respuestas que cambió de lugar; el Resumen usa las reglas del servidor', async () => {
     const tabs = sampleTabs();
     tabs.Respuestas.push(['INV-002', 'INV-002-P1', 'asistirá', '1', '2027-01-15T19:20:00-06:00', 'otra-familia-01']);
