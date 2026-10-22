@@ -74,6 +74,14 @@ const MIGRATIONS: { version: number; name: string; sql: string }[] = [
       );
     `,
   },
+  {
+    version: 2,
+    name: 'identificador-sin-mayusculas',
+    sql: `
+      -- FAM-001 y fam-001 son el mismo identificador.
+      CREATE UNIQUE INDEX idx_invitations_code_nocase ON invitations(code COLLATE NOCASE);
+    `,
+  },
 ];
 
 export const now = () => new Date().toISOString();
@@ -118,6 +126,15 @@ export function tx<T>(db: DB, fn: () => T): T {
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
+  }
+}
+
+/** Si cambió la contraseña del panel, cierra todas las sesiones abiertas. */
+export function syncAdminCredential(db: DB, fingerprint: string) {
+  const stored = getSetting(db, 'admin_credential');
+  if (stored !== fingerprint) {
+    db.prepare('DELETE FROM admin_sessions').run();
+    setSetting(db, 'admin_credential', fingerprint);
   }
 }
 

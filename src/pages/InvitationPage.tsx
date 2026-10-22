@@ -138,7 +138,11 @@ export default function InvitationPage({ token, staticDemo }: Props) {
       /* almacenamiento no disponible */
     }
     window.scrollTo({ top: 0 });
-    window.setTimeout(() => mainRef.current?.focus({ preventScroll: true }), 50);
+    // Lleva el foco al contenido sin quitárselo a quien ya empezó a navegar con teclado.
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body) mainRef.current?.focus({ preventScroll: true });
+    });
   }, []);
 
   const icsHref = useMemo(() => `data:text/calendar;charset=utf-8,${encodeURIComponent(buildIcs())}`, []);
@@ -152,11 +156,11 @@ export default function InvitationPage({ token, staticDemo }: Props) {
         </div>
       ) : null}
       {!envelopeDone ? <Envelope guestName={invitation?.name} onOpen={onEnvelopeOpen} /> : null}
-      <a className="skip-link" href="#confirmar">
-        Ir a confirmar asistencia
-      </a>
 
       <main ref={mainRef} tabIndex={-1} aria-hidden={!envelopeDone || undefined} style={{ outline: 'none' }}>
+        <a className="skip-link" href="#confirmar">
+          Ir a confirmar asistencia
+        </a>
         {/* 1 · Portada */}
         <header className="hero">
           <h1 className="logo-frame" style={{ margin: 0 }}>

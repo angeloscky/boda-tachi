@@ -280,7 +280,7 @@ export function createInvitation(db: DB, body: Record<string, unknown>): AdminIn
   const { value, errors } = checkInvitationFields(body);
   if (errors.length) throw new HttpError(400, 'invalid', errors.join(' '));
   return tx(db, () => {
-    if (db.prepare('SELECT 1 FROM invitations WHERE code = ?').get(value.code)) {
+    if (db.prepare('SELECT 1 FROM invitations WHERE code = ? COLLATE NOCASE').get(value.code)) {
       throw new HttpError(409, 'duplicate_code', `Ya existe una invitación con el identificador ${value.code}.`);
     }
     const t = now();
@@ -299,7 +299,7 @@ export function updateInvitation(db: DB, id: number, body: Record<string, unknow
   if (errors.length) throw new HttpError(400, 'invalid', errors.join(' '));
   return tx(db, () => {
     const existing = getInvitation(db, id);
-    const clash = db.prepare('SELECT id FROM invitations WHERE code = ? AND id <> ?').get(value.code, id);
+    const clash = db.prepare('SELECT id FROM invitations WHERE code = ? COLLATE NOCASE AND id <> ?').get(value.code, id);
     if (clash) throw new HttpError(409, 'duplicate_code', `Ya existe otra invitación con el identificador ${value.code}.`);
     const confirmed = confirmedAdults(db, id);
     if (confirmed > 0 && (value.seats === null || value.seats < confirmed)) {
@@ -417,9 +417,10 @@ function analyzeImport(db: DB, csv: string): ParsedImport {
     });
     return { preview: { rows: result, canApply: false, counts: { create: 0, update: 0, unchanged: 0, error: 1 } }, rows };
   }
+  // Quita la comilla protectora que la exportación antepone a celdas tipo fórmula.
   const col = (r: string[], key: string) => {
     const i = header.indexOf(key);
-    return i >= 0 ? (r[i] ?? '') : undefined;
+    return i >= 0 ? (r[i] ?? '').replace(/^'(?=[=+\-@])/, '') : undefined;
   };
   const seenCodes = new Map<string, number>();
   const phones = new Map<string, string>();
@@ -436,17 +437,21 @@ function analyzeImport(db: DB, csv: string): ParsedImport {
       else seenCodes.set(value.code.toLowerCase(), line);
     }
     const existing = value.code
-      ? (db.prepare('SELECT id, name, phone, seats, notes FROM invitations WHERE code = ?').get(value.code) as
-          | { id: number; name: string; phone: string | null; seats: number | null; notes: string | null }
+      ? (db.prepare('SELECT id, code, name, phone, seats, notes FROM invitations WHERE code = ? COLLATE NOCASE').get(value.code) as
+          | { id: number; code: string; name: string; phone: string | null; seats: number | null; notes: string | null }
           | undefined)
       : undefined;
     if (value.phone) {
       const other = phones.get(value.phone);
-      if (other && other !== value.code) warnings.push(`Mismo teléfono que ${other}; se guardan como invitaciones distintas.`);
+      if (other && other.toLowerCase() !== value.code.toLowerCase()) warnings.push(`Mismo teléfono que ${other}; se guardan como invitaciones distintas.`);
       else phones.set(value.phone, value.code);
     }
-    // En importación, una columna de notas ausente conserva las notas existentes.
-    if (raw.notes === undefined && existing) value.notes = existing.notes;
+    // En importación, una columna ausente (teléfono o notas) conserva el valor existente.
+    if (existing) {
+      if (raw.notes === undefined) value.notes = existing.notes;
+      if (raw.phone === undefined) value.phone = existing.phone;
+      value.code = existing.code; // conserva la escritura original del identificador
+    }
     if (existing) {
       const confirmed = confirmedAdults(db, existing.id);
       if (confirmed > 0 && (value.seats === null || value.seats < confirmed)) {
@@ -459,6 +464,15 @@ function analyzeImport(db: DB, csv: string): ParsedImport {
       const same =
         existing.name === value.name && existing.phone === value.phone && existing.seats === value.seats && existing.notes === value.notes;
       action = same ? 'unchanged' : 'update';
+      if (!same) {
+        const changed = [
+          existing.name !== value.name && 'nombre',
+          existing.phone !== value.phone && (value.phone ? 'teléfono' : 'teléfono (se borra)'),
+          existing.seats !== value.seats && `lugares ${existing.seats ?? 'pendiente'} → ${value.seats ?? 'pendiente'}`,
+          existing.notes !== value.notes && 'notas',
+        ].filter(Boolean);
+        warnings.unshift(`Cambia: ${changed.join(', ')}.`);
+      }
     }
     result.push({ line, code: value.code, name: value.name, action, errors, warnings });
     rows.push({ code: value.code, value, action });
@@ -481,7 +495,7 @@ export function applyImport(db: DB, csv: string): ImportPreview {
     const insert = db.prepare(
       `INSERT INTO invitations (code, token, name, phone, seats, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    const update = db.prepare(`UPDATE invitations SET name = ?, phone = ?, seats = ?, notes = ?, updated_at = ? WHERE code = ?`);
+    const update = db.prepare(`UPDATE invitations SET name = ?, phone = ?, seats = ?, notes = ?, updated_at = ? WHERE code = ? COLLATE NOCASE`);
     for (const r of rows) {
       if (r.action === 'create') insert.run(r.value.code, newToken(), r.value.name, r.value.phone, r.value.seats, r.value.notes, t, t);
       else if (r.action === 'update') update.run(r.value.name, r.value.phone, r.value.seats, r.value.notes, t, r.value.code);

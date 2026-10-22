@@ -12,6 +12,8 @@ export interface AppConfig {
   clientDir: string;
   messagingProvider: string;
   production: boolean;
+  /** Saltos de proxy de confianza para obtener la IP real (0 = ninguno). */
+  trustProxy: number;
 }
 
 /** Raíz del proyecto, tanto en desarrollo (server/) como compilado (dist/server/server/). */
@@ -38,14 +40,20 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     adminPasswordHash: env.ADMIN_PASSWORD_HASH || null,
     adminPasswordPlain: env.ADMIN_PASSWORD || null,
     cookieSecure: env.COOKIE_SECURE ? env.COOKIE_SECURE === 'true' : publicBaseUrl.startsWith('https://'),
-    clientDir: path.join(root, 'dist/client'),
+    clientDir: env.CLIENT_DIR ? path.resolve(root, env.CLIENT_DIR) : path.join(root, 'dist/client'),
     messagingProvider: env.MESSAGING_PROVIDER || 'simulation',
     production,
+    trustProxy: Number(env.TRUST_PROXY || 0),
     ...overrides,
   };
-  const publicDirs = [path.join(root, 'public'), path.join(root, 'dist')];
-  if (publicDirs.some((d) => config.dbPath.startsWith(d + path.sep))) {
-    throw new Error(`DB_PATH (${config.dbPath}) no puede estar dentro de un directorio público.`);
+  // La base nunca debe quedar dentro de un directorio que se sirve o se publica.
+  const servedDirs = [path.join(root, 'public'), path.join(root, 'dist'), config.clientDir];
+  const dbReal = path.resolve(config.dbPath);
+  for (const dir of servedDirs) {
+    const rel = path.relative(path.resolve(dir), dbReal);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+      throw new Error(`DB_PATH (${config.dbPath}) no puede estar dentro de un directorio público (${dir}).`);
+    }
   }
   return config;
 }

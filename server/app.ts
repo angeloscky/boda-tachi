@@ -4,7 +4,8 @@ import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cookieParser from 'cookie-parser';
 import type { AppConfig } from './config.js';
-import { backupTo, setSetting, type DB } from './db.js';
+import crypto from 'node:crypto';
+import { backupTo, setSetting, syncAdminCredential, type DB } from './db.js';
 import {
   SESSION_COOKIE,
   createLimiter,
@@ -59,29 +60,46 @@ const idParam = (req: Request) => {
 export function createApp(db: DB, config: AppConfig, opts: { provider?: MessagingProvider } = {}) {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
+  // Solo se confía en X-Forwarded-For si hay un proxy declarado (TRUST_PROXY).
+  app.set('trust proxy', config.trustProxy > 0 ? config.trustProxy : false);
   const provider = opts.provider ?? getProvider(config.messagingProvider);
   const passwordHash = config.adminPasswordHash ?? (config.adminPasswordPlain ? hashPassword(config.adminPasswordPlain) : null);
+  // Cambiar la contraseña invalida las sesiones abiertas. (Con ADMIN_PASSWORD en texto
+  // plano, solo para desarrollo, el hash cambia en cada arranque y también las cierra.)
+  syncAdminCredential(db, crypto.createHash('sha256').update(passwordHash ?? '').digest('hex'));
+  const allowedOrigin = new URL(config.publicBaseUrl).origin;
 
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    if (config.cookieSecure) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
     res.setHeader(
       'Content-Security-Policy',
       "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
     next();
   });
-  app.use(express.json({ limit: '2mb' }));
+  // Cuerpos pequeños en general; la importación CSV admite archivos de hasta 2 MB.
+  app.use('/api/admin/import', express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '16kb' }));
   app.use(cookieParser());
 
   // Las peticiones que modifican datos deben venir de este mismo sitio.
   app.use('/api', (req, res, next) => {
     if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
       const origin = req.get('origin');
-      if (origin && new URL(origin).host !== req.get('host')) {
+      let sameSite = true;
+      if (origin) {
+        try {
+          const o = new URL(origin);
+          sameSite = o.origin === allowedOrigin || o.host === req.get('host');
+        } catch {
+          sameSite = false;
+        }
+      }
+      if (!sameSite) {
         res.status(403).json({ error: 'bad_origin', message: 'Origen no permitido.' });
         return;
       }
@@ -92,6 +110,7 @@ export function createApp(db: DB, config: AppConfig, opts: { provider?: Messagin
 
   const publicLimiter = createLimiter(120, 60_000);
   const loginLimiter = createLimiter(10, 15 * 60_000);
+  const globalLoginLimiter = createLimiter(30, 60 * 60_000); // tope total por hora, sin importar la IP
   const ip = (req: Request) => req.ip ?? 'desconocida';
 
   // ------------------------------------------------------------ invitado
@@ -122,6 +141,9 @@ export function createApp(db: DB, config: AppConfig, opts: { provider?: Messagin
       }
       const password = typeof req.body?.password === 'string' ? req.body.password : '';
       if (!password || !verifyPassword(password, passwordHash)) {
+        if (!globalLoginLimiter.hit('global')) {
+          throw new HttpError(429, 'rate_limited', 'Demasiados intentos fallidos. Espera una hora.');
+        }
         throw new HttpError(401, 'bad_credentials', 'Contraseña incorrecta.');
       }
       loginLimiter.reset(ip(req));
@@ -277,13 +299,13 @@ export function createApp(db: DB, config: AppConfig, opts: { provider?: Messagin
       .readFileSync(indexFile, 'utf8')
       .replaceAll('%PUBLIC_BASE_URL%', config.publicBaseUrl)
       .replace('<title>', `<meta property="og:url" content="${config.publicBaseUrl}/" />\n    <title>`);
-    app.use(express.static(config.clientDir, { index: false, maxAge: '1h', setHeaders: (res, file) => {
-      if (/[\\/]assets[\\/].+-[A-Za-z0-9_-]{8}\.(js|css|woff2?)$/.test(file)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    } }));
-    app.get(['/', '/i/:token', '/admin', '/admin/*'], (_req, res) => {
+    app.get(['/', '/index.html', '/i/:token', '/admin', '/admin/*'], (_req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       res.type('html').send(html);
     });
+    app.use(express.static(config.clientDir, { index: false, maxAge: '1h', setHeaders: (res, file) => {
+      if (/[\\/]assets[\\/].+-[A-Za-z0-9_-]{8}\.(js|css|woff2?)$/.test(file)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } }));
   }
   app.use((_req, res) => res.status(404).type('text').send('No encontrado'));
 
@@ -292,8 +314,13 @@ export function createApp(db: DB, config: AppConfig, opts: { provider?: Messagin
       res.status(err.status).json({ error: err.code, message: err.message });
       return;
     }
-    if (err && typeof err === 'object' && 'type' in err && (err as { type: string }).type === 'entity.parse.failed') {
-      res.status(400).json({ error: 'invalid_json', message: 'La solicitud no es válida.' });
+    const e = err as { type?: string; status?: number; expose?: boolean };
+    if (e?.type === 'entity.too.large') {
+      res.status(413).json({ error: 'too_large', message: 'La solicitud es demasiado grande.' });
+      return;
+    }
+    if (e?.expose && typeof e.status === 'number' && e.status >= 400 && e.status < 500) {
+      res.status(e.status).json({ error: 'invalid_request', message: 'La solicitud no es válida.' });
       return;
     }
     console.error(err);
