@@ -87,7 +87,7 @@ function PlaceCard({ id, kind, place }: { id: string; kind: string; place: Place
       </div>
       <h3 id={`${id}-name`}>{place.name}</h3>
       {place.address ? <p>{place.address}</p> : <p>{place.area}</p>}
-      {place.pendingNote ? <p>{place.pendingNote}</p> : null}
+      {place.note ? <p>{place.note}</p> : null}
       <div className="actions">
         <a className="btn btn-block" href={place.mapsUrl} {...ext} data-testid={`maps-${id}`}>
           <PinIcon /> Cómo llegar

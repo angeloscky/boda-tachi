@@ -2,6 +2,16 @@
 
 **Título:** Boda Tachi · Invitación digital de Sofía e Isaac (primera versión integral)
 **Responsable:** Claude (diseño, desarrollo e integración), con dos revisores independientes (UX/QA y datos/seguridad).
+**Para:** ChatGPT, como orquestador de la estructura del proyecto.
+
+## Resumen para orquestar
+
+- La invitación, la confirmación con base de datos, el panel, el CSV y la preparación de mensajes están construidos y probados en local.
+- **Pendientes de estos días** (dependen de Angel): la lista definitiva de invitados, la conexión de WhatsApp y el alojamiento con dominio. Nada de eso bloquea el código: entran como datos o configuración.
+- **Ya resueltos por Angel (21:45 CST):**
+  - La recepción es en el salón de Quinta de Torres, no en la terraza. Ya aparece en la invitación.
+  - Los apellidos de la novia son García Aguilar. El nombre completo quedó como "Sofía Lizeth García Aguilar"; falta confirmar si el segundo nombre se escribe Lizeth o Lisette (Angel lo dictó por voz).
+- Próximo paso recomendado: publicar el backend en un alojamiento con disco persistente, para tener el dominio con el que se arman los enlaces que irán por WhatsApp.
 
 ## Tiempos (America/Mexico_City)
 
@@ -108,6 +118,22 @@ También se simuló el despliegue de producción: solo dependencias de producci�
 
 Las habilidades `frontend-design` y `webapp-testing` no estaban disponibles en esta sesión. En su lugar se usaron Playwright directamente y revisión visual con capturas (`docs/capturas/`).
 
+## Cómo llega la invitación al teléfono de cada invitado
+
+1. **Cada familia tiene su enlace personal.** Al darla de alta en el panel (a mano o importando el CSV) se genera un enlace único, por ejemplo `https://<dominio>/i/Xk3…`. Ese enlace solo abre su invitación y su confirmación, sin contraseña.
+2. **El enlace va dentro de un mensaje de WhatsApp.** En el panel, botón "Mensaje" de cada familia, ya está el texto listo: saludo con el nombre de la familia, lugares reservados y el enlace.
+3. **El invitado toca el enlace en su celular.** WhatsApp muestra una tarjeta con el monograma y "Sofía e Isaac · 22 de mayo de 2027" (sin datos de la familia). Al tocarla se abre el navegador del teléfono: ve el sobre, lo abre, consulta toda la información y confirma cuántos adultos asistirán. Puede volver a abrir el mismo enlace para ver o cambiar su respuesta mientras las confirmaciones estén abiertas.
+4. **El panel ve la respuesta al instante** y separa "mensaje enviado" de "asistencia confirmada".
+
+**Requisito previo:** la aplicación tiene que estar publicada en un dominio (por ejemplo `boda-sofia-isaac.com` o un subdominio del alojamiento). Mientras corra solo en una computadora, los enlaces no abren desde el teléfono de los invitados.
+
+**Formas de enviar los mensajes:**
+
+| Opción | Cómo funciona | Qué necesita | Recomendación |
+| --- | --- | --- | --- |
+| A. Envío manual desde el WhatsApp de los novios (ya funciona) | En el panel, desde el celular: "Mensaje" → "Abrir en WhatsApp" abre el chat de esa familia con el texto escrito; se toca enviar y luego "Registrar envío manual". Para familias sin teléfono, "Copiar texto" y pegarlo donde haga falta. | Solo el dominio publicado y los teléfonos en la lista | **Recomendada** para una boda: unos minutos por cada decena de familias, sale del número que los invitados ya conocen y no requiere aprobación de Meta. |
+| B. Envío automático | Un proveedor nuevo con la interfaz `MessagingProvider` manda todos los mensajes y registra "enviado" y "entregado" por webhook. | WhatsApp Business Platform (Cloud API) de Meta: número dedicado que no esté en uso en WhatsApp, cuenta Meta Business verificada y una plantilla de mensaje aprobada. Tiene costo por conversación. WhatsApp personal no permite esto. | Solo si la lista es muy grande o se quieren recordatorios masivos. |
+
 ## Logo
 
 - El original está conservado sin cambios.
@@ -117,14 +143,15 @@ Las habilidades `frontend-design` y `webapp-testing` no estaban disponibles en e
 
 ## Pendientes que necesitan un dato o acceso externo
 
-1. **Alojamiento con almacenamiento persistente y dominio**, para publicar el backend y obtener la URL de revisión (Railway, Render con disco, Fly.io con volumen o un VPS). Hay que definir `PUBLIC_BASE_URL`, `ADMIN_PASSWORD_HASH` y `TRUST_PROXY`.
+1. **Alojamiento con almacenamiento persistente y dominio**, para publicar el backend, obtener la URL de revisión y poder enviar enlaces que abran en el teléfono (Railway, Render con disco, Fly.io con volumen o un VPS). Hay que definir `PUBLIC_BASE_URL`, `ADMIN_PASSWORD_HASH` y `TRUST_PROXY`.
 2. **WhatsApp Business Platform (Cloud API):** un número dedicado, una cuenta de Meta Business y una plantilla aprobada. WhatsApp personal no permite envíos automatizados. Con eso se implementa el proveedor real y el webhook de entregas.
 3. **Listado definitivo de invitados** con los lugares por familia (la plantilla CSV está lista).
 4. **Contenido opcional, todavía sin datos:** mesa de Amazon, datos de transferencia, música y fecha límite para confirmar. Cada sección aparece sola cuando se llena en `shared/event.ts`.
-5. **Salón interno y acceso exacto en Quinta de Torres** (`reception.pendingNote`).
-6. **Cotejo editorial del nombre completo de la novia.** Está registrado como "Sofia Lizeth Garcia Aguilar", pero el padre es Carlos Patzka Aguirre. También faltan acentos en los dos nombres completos (no se muestran en la invitación).
-7. **Comprobación manual de que los tres enlaces externos cargan** (Maps ×2 y Liverpool), porque la red de este entorno los bloquea.
-8. Opcional: el SVG original del logo, para reemplazar el trazado automático.
+5. **Acceso exacto dentro de Quinta de Torres**, si conviene indicarlo (`reception.note`). El salón ya está confirmado.
+6. **Escritura del segundo nombre de la novia** (Lizeth o Lisette) y acentos del nombre completo del novio (Isaac Yael Vázquez González). No se muestran en la invitación; están en `editorialFullNames`.
+7. **Elegir cómo se envían los mensajes** (opción A manual o B automática, ver arriba). Para la opción B: número dedicado y cuenta Meta Business.
+8. **Comprobación manual de que los tres enlaces externos cargan** (Maps ×2 y Liverpool), porque la red de este entorno los bloquea.
+9. Opcional: el SVG original del logo, para reemplazar el trazado automático.
 
 ## Versión
 

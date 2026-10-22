@@ -13,7 +13,7 @@ export interface Place {
   time: string; // HH:MM, 24 h, America/Mexico_City
   timeLabel: string;
   mapsUrl: string;
-  pendingNote?: string;
+  note?: string;
 }
 
 export interface EventConfig {
@@ -47,9 +47,9 @@ export const EVENT: EventConfig = {
   couple: { bride: 'Sofía', groom: 'Isaac' },
   editorialFullNames: {
     groom: 'Isaac Yael Vazquez Gonzalez',
-    bride: 'Sofia Lizeth Garcia Aguilar',
+    bride: 'Sofía Lizeth García Aguilar',
     reviewNote:
-      'Transcritos tal como se registraron, sin acentos. Cotejar acentuación (Vázquez, González, Sofía, García) y apellido paterno de la novia, ya que su padre registrado es Carlos Patzka Aguirre.',
+      'Apellidos de la novia confirmados por Angel el 2026-10-21 (García Aguilar). Pendiente confirmar la escritura del segundo nombre (Lizeth o Lisette) y la acentuación del nombre del novio.',
   },
   dateISO: '2027-05-22',
   dateLabel: '22 de mayo de 2027',
@@ -78,8 +78,8 @@ export const EVENT: EventConfig = {
     time: '20:30',
     timeLabel: '8:30 p. m.',
     mapsUrl: 'https://www.google.com/maps/?cid=10313593131170748878',
-    // Salón interno y acceso exacto: pendientes. Agregar aquí cuando se confirmen.
-    pendingNote: undefined,
+    // Confirmado por Angel (2026-10-21): en el salón, no en la terraza. Acceso exacto pendiente.
+    note: 'La recepción será en el salón (no en la terraza).',
   },
   dressCode: {
     title: 'All black',
