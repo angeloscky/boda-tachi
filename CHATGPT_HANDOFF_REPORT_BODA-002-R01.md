@@ -23,7 +23,7 @@ La primera maqueta navegable se publicó a las 21:12 (17 min después del inicio
 
 ## Ubicación y versión
 
-- Repositorio: https://github.com/angeloscky/boda-tachi, rama `main`, commit de código `8d6408f`.
+- Repositorio: https://github.com/angeloscky/boda-tachi, rama `main`, commit de código `ece9af8`.
 - Se trabajó en un contenedor Linux en la nube. `C:\BODA_TACHI` no existía y no había acceso a `C:\`, así que la raíz acordada en el equipo de Angel es `C:\Users\Pc\boda tachi`. Ahí están el logo original y una copia `.zip` del proyecto.
 - No existía BODA-001, así que se partió de cero con el stack acordado.
 
@@ -155,5 +155,5 @@ Las habilidades `frontend-design` y `webapp-testing` no estaban disponibles en e
 
 ## Versión
 
-- Código verificado (pruebas 31/31 y 12/12): commit `8d6408f` en `main`.
+- Código verificado (pruebas 31/31 y 12/12): commit `ece9af8` en `main` (incluye las confirmaciones de Angel de las 21:45).
 - Este informe se agrega en el commit siguiente, sin cambios de código.
