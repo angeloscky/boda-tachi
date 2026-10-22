@@ -47,9 +47,9 @@ export const EVENT: EventConfig = {
   couple: { bride: 'Sofía', groom: 'Isaac' },
   editorialFullNames: {
     groom: 'Isaac Yael Vazquez Gonzalez',
-    bride: 'Sofía Lizeth García Aguilar',
+    bride: 'Sofía Lisette García Aguilar',
     reviewNote:
-      'Apellidos de la novia confirmados por Angel el 2026-10-21 (García Aguilar). Pendiente confirmar la escritura del segundo nombre (Lizeth o Lisette) y la acentuación del nombre del novio.',
+      'Nombre de la novia confirmado por Angel el 2026-10-21 (Sofía Lisette García Aguilar; antes registrado como "Sofia Lizeth Garcia Aguilar"). Pendiente confirmar la acentuación del nombre del novio.',
   },
   dateISO: '2027-05-22',
   dateLabel: '22 de mayo de 2027',
