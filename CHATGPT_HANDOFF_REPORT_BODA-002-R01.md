@@ -10,7 +10,7 @@
 - **Pendientes de estos días** (dependen de Angel): la lista definitiva de invitados, la conexión de WhatsApp y el alojamiento con dominio. Nada de eso bloquea el código: entran como datos o configuración.
 - **Ya resueltos por Angel (21:45 CST):**
   - La recepción es en el salón de Quinta de Torres, no en la terraza. Ya aparece en la invitación.
-  - Los apellidos de la novia son García Aguilar. El nombre completo quedó como "Sofía Lizeth García Aguilar"; falta confirmar si el segundo nombre se escribe Lizeth o Lisette (Angel lo dictó por voz).
+  - El nombre completo de la novia es **Sofía Lisette García Aguilar** (sustituye al registro anterior "Sofia Lizeth Garcia Aguilar").
 - Próximo paso recomendado: publicar el backend en un alojamiento con disco persistente, para tener el dominio con el que se arman los enlaces que irán por WhatsApp.
 
 ## Tiempos (America/Mexico_City)
@@ -23,7 +23,7 @@ La primera maqueta navegable se publicó a las 21:12 (17 min después del inicio
 
 ## Ubicación y versión
 
-- Repositorio: https://github.com/angeloscky/boda-tachi, rama `main`, commit de código `ece9af8`.
+- Repositorio: https://github.com/angeloscky/boda-tachi, rama `main`, commit de código `eb675d5`.
 - Se trabajó en un contenedor Linux en la nube. `C:\BODA_TACHI` no existía y no había acceso a `C:\`, así que la raíz acordada en el equipo de Angel es `C:\Users\Pc\boda tachi`. Ahí están el logo original y una copia `.zip` del proyecto.
 - No existía BODA-001, así que se partió de cero con el stack acordado.
 
@@ -148,12 +148,12 @@ Las habilidades `frontend-design` y `webapp-testing` no estaban disponibles en e
 3. **Listado definitivo de invitados** con los lugares por familia (la plantilla CSV está lista).
 4. **Contenido opcional, todavía sin datos:** mesa de Amazon, datos de transferencia, música y fecha límite para confirmar. Cada sección aparece sola cuando se llena en `shared/event.ts`.
 5. **Acceso exacto dentro de Quinta de Torres**, si conviene indicarlo (`reception.note`). El salón ya está confirmado.
-6. **Escritura del segundo nombre de la novia** (Lizeth o Lisette) y acentos del nombre completo del novio (Isaac Yael Vázquez González). No se muestran en la invitación; están en `editorialFullNames`.
+6. **Acentos del nombre completo del novio** (registrado como "Isaac Yael Vazquez Gonzalez"; probablemente Vázquez González). No se muestra en la invitación; está en `editorialFullNames`.
 7. **Elegir cómo se envían los mensajes** (opción A manual o B automática, ver arriba). Para la opción B: número dedicado y cuenta Meta Business.
 8. **Comprobación manual de que los tres enlaces externos cargan** (Maps ×2 y Liverpool), porque la red de este entorno los bloquea.
 9. Opcional: el SVG original del logo, para reemplazar el trazado automático.
 
 ## Versión
 
-- Código verificado (pruebas 31/31 y 12/12): commit `ece9af8` en `main` (incluye las confirmaciones de Angel de las 21:45).
+- Código verificado (pruebas 31/31 y 12/12): commit `eb675d5` en `main` (incluye las confirmaciones de Angel de las 21:45).
 - Este informe se agrega en el commit siguiente, sin cambios de código.
