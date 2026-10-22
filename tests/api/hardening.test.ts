@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { adminAgent, createInv, makeApp, rsvpBody, tempDbPath, testConfig } from './helpers.js';
+import { ADMIN_PASSWORD, adminAgent, createInv, makeApp, rsvpBody, tempDbPath, testConfig } from './helpers.js';
 import { openDb } from '../../server/db.js';
 import { createApp } from '../../server/app.js';
 import { hashPassword } from '../../server/auth.js';
@@ -63,6 +63,18 @@ describe('endurecimiento tras la revisión de seguridad', () => {
     for (let i = 0; i < 10; i++) await request(app).post('/api/admin/login').set('X-Forwarded-For', `198.51.100.${i}`).send({ password: 'mala' });
     const r = await request(app).post('/api/admin/login').set('X-Forwarded-For', '198.51.100.250').send({ password: 'mala' });
     expect(r.status).toBe(429);
+  });
+
+  it('superado el tope global de intentos fallidos, ni la contraseña correcta entra (no hay oráculo)', async () => {
+    const { app } = makeApp();
+    const dbPath = tempDbPath('tope');
+    const trusted = createApp(openDb(dbPath), { ...testConfig(dbPath), trustProxy: 1 });
+    for (let i = 0; i < 30; i++) {
+      await request(trusted).post('/api/admin/login').set('X-Forwarded-For', `203.0.113.${i}`).send({ password: 'mala' }).expect(401);
+    }
+    const ok = await request(trusted).post('/api/admin/login').set('X-Forwarded-For', '203.0.113.200').send({ password: ADMIN_PASSWORD });
+    expect(ok.status).toBe(429);
+    expect((await request(app).post('/api/admin/login').send({ password: ADMIN_PASSWORD })).status).toBe(200); // otro proceso, sin tope
   });
 
   it('cambiar la contraseña (reiniciar con otra) invalida las sesiones existentes', async () => {

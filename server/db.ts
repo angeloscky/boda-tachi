@@ -118,6 +118,15 @@ const MIGRATIONS: { version: number; name: string; sql: string }[] = [
       DELETE FROM responses WHERE status = 'attending' AND person_ids = '[]';
     `,
   },
+  {
+    version: 4,
+    name: 'revision-sin-retroceso',
+    sql: `
+      -- Revisión de una invitación cuya respuesta se borró: la siguiente parte de aquí y no de 0,
+      -- para que un dispositivo que vio la respuesta borrada reciba un conflicto.
+      ALTER TABLE invitations ADD COLUMN revision_floor INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export const now = () => new Date().toISOString();

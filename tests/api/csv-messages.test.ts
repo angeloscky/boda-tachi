@@ -151,7 +151,7 @@ describe('preparación de mensajes', () => {
   it('prepara el mensaje sin enviarlo y separa comunicación de asistencia', async () => {
     const { app } = makeApp();
     const admin = await adminAgent(app);
-    const inv = await createInv(admin, { code: 'M-1', name: 'Familia Mensaje', seats: 2, phone: '3398765432', people: ['Uno'] });
+    const inv = await createInv(admin, { code: 'M-1', name: 'Familia Mensaje', seats: 2, phone: '3398765432', people: ['Uno', 'Dos'] });
     const msg = (await admin.get(`/api/admin/invitations/${inv.id}/message`)).body;
     expect(msg.text).toContain('Familia Mensaje');
     expect(msg.text).toContain(inv.link);
@@ -182,5 +182,20 @@ describe('preparación de mensajes', () => {
     const text = buildInviteMessage({ name: 'Familia X', seats: null, link: 'https://x/i/abc' });
     expect(text).not.toMatch(/lugar/);
     expect(text).not.toMatch(/\n\n\n/);
+  });
+
+  it('usa las personas autorizadas para el número de lugares y el singular', () => {
+    const one = buildInviteMessage({ name: 'Marina', seats: 2, people: 1, link: 'https://x/i/abc' });
+    expect(one).toContain('Hemos reservado 1 lugar para ti.');
+    expect(one).toContain('queremos invitarte');
+    expect(one).toContain('Aquí está tu invitación');
+    const capped = buildInviteMessage({ name: 'Familia Sol', seats: 3, people: 4, link: 'https://x/i/abc' });
+    expect(capped).toContain('Hemos reservado 3 lugares para ustedes.');
+    expect(capped).toContain('invitarlos');
+    const extra = buildInviteMessage({ name: 'Familia Prado', seats: 5, people: 2, link: 'https://x/i/abc' });
+    expect(extra).toContain('Hemos reservado 2 lugares para ustedes.');
+    const coupleOneSeat = buildInviteMessage({ name: 'Familia Duo', seats: 1, people: 2, link: 'https://x/i/abc' });
+    expect(coupleOneSeat).toContain('Hemos reservado 1 lugar para ustedes.');
+    expect(coupleOneSeat).toContain('invitarlos');
   });
 });

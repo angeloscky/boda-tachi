@@ -71,6 +71,30 @@ describe('estados honestos de la aplicación', () => {
     }
   });
 
+  it('en producción exige PUBLIC_BASE_URL y no arranca la demostración por descuido', () => {
+    const keys = ['NODE_ENV', 'PUBLIC_BASE_URL', 'RSVP_BACKEND', 'DEMO_IN_PRODUCTION'] as const;
+    const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    const paths = { clientDir: '/tmp/a', dbPath: '/tmp/b/c.sqlite' };
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.PUBLIC_BASE_URL;
+      delete process.env.RSVP_BACKEND;
+      delete process.env.DEMO_IN_PRODUCTION;
+      expect(() => loadConfig(paths)).toThrow(/PUBLIC_BASE_URL/);
+      process.env.PUBLIC_BASE_URL = 'https://boda.example';
+      expect(loadConfig(paths).rsvpBackend).toBe('disabled');
+      process.env.RSVP_BACKEND = 'demo';
+      expect(() => loadConfig(paths)).toThrow(/DEMO_IN_PRODUCTION/);
+      process.env.DEMO_IN_PRODUCTION = '1';
+      expect(loadConfig(paths).rsvpBackend).toBe('demo');
+    } finally {
+      for (const k of keys) {
+        if (prev[k] === undefined) delete process.env[k];
+        else process.env[k] = prev[k];
+      }
+    }
+  });
+
   it('la demostración se anuncia como tal y el HTML no lleva credenciales personales', async () => {
     const dbPath = tempDbPath('demo');
     const db = openDb(dbPath);

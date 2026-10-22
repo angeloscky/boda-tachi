@@ -67,6 +67,14 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     },
     ...overrides,
   };
+  if (config.production) {
+    // En producción no se adivina la dirección pública: de ella salen og:url, el enlace general y los personales.
+    if (!env.PUBLIC_BASE_URL && !overrides.publicBaseUrl) throw new Error('En producción define PUBLIC_BASE_URL (la dirección pública de la invitación).');
+    // La demostración en producción solo a propósito: sus respuestas son de prueba.
+    if (config.rsvpBackend === 'demo' && env.DEMO_IN_PRODUCTION !== '1') {
+      throw new Error('RSVP_BACKEND=demo en producción guarda respuestas de prueba. Si es una demostración pública, define DEMO_IN_PRODUCTION=1.');
+    }
+  }
   // La base nunca debe quedar dentro de un directorio que se sirve o se publica.
   const servedDirs = [path.join(root, 'public'), path.join(root, 'dist'), config.clientDir];
   const dbReal = path.resolve(config.dbPath);

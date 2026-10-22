@@ -108,7 +108,9 @@ export function createSheetsStore(client: SheetsClient, log: (msg: string) => vo
     },
     async saveResponse(token, req) {
       if (!LIVE_TOKEN_RE.test(token)) throw new HttpError(404, 'not_found', NOT_FOUND_MESSAGE);
-      const unavailable = 'No pudimos guardar tu respuesta en este momento. No se registró; inténtalo de nuevo.';
+      // Tras un tiempo agotado la escritura pudo haber ocurrido: no se afirma que no se guardó.
+      // Reintentar con el mismo requestId es seguro (no duplica).
+      const unavailable = 'No pudimos comprobar que tu respuesta se guardara. Inténtalo de nuevo: si ya se había guardado, no se duplicará.';
       const data = await call<ScriptInvitation & { outcome: SaveRsvpResult['outcome'] }>('saveResponse', { token, request: req }, unavailable);
       if (!data.ok) {
         if (data.code === 'conflict' && data.current) {

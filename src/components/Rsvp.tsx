@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { PublicInvitation } from '../../shared/types';
-import { ApiFailure, newRequestId, saveRsvp } from '../lib/api';
+import { ApiFailure, fetchInvitation, newRequestId, saveRsvp } from '../lib/api';
 import type { UiMode } from '../lib/mode';
 import { EVENT } from '../../shared/event';
 import { CheckCircleIcon } from './Icons';
@@ -27,6 +27,25 @@ const deadlineText = () =>
     : null;
 
 const lugares = (n: number) => `${n} ${n === 1 ? 'lugar' : 'lugares'}`;
+
+/** Lugares que la familia puede usar: el cupo, sin pasar del número de personas autorizadas. */
+const reservedOf = (inv: PublicInvitation) => Math.min(inv.seats ?? 0, inv.people.length);
+
+function seatsText(inv: PublicInvitation) {
+  const n = reservedOf(inv);
+  if (!n) return null;
+  return inv.people.length === 1 ? 'Hemos reservado 1 lugar para ti.' : `Hemos reservado ${lugares(n)} para ustedes.`;
+}
+
+/** Enfoca un encabezado y lo deja a media pantalla (lejos del aviso superior y de la barra inferior). */
+function focusInView(el: HTMLElement | null) {
+  if (!el) return;
+  el.focus({ preventScroll: true });
+  el.scrollIntoView({ block: 'center' });
+}
+
+/** Rechazos que indican que la invitación cambió (cupo, personas o cierre): se vuelve a cargar. */
+const REFRESH_CODES = ['over_capacity', 'unknown_person', 'inactive_person', 'rsvp_closed', 'seats_unassigned', 'request_id_reused'];
 
 /** Texto del paquete BODA-003-R02, cerca de la lista de personas y del formulario. */
 export function NonTransferableNote() {
@@ -105,9 +124,13 @@ function namesOf(inv: PublicInvitation, ids: string[]) {
 }
 
 function summaryLine(inv: PublicInvitation, d: Draft) {
-  if (d.none) return inv.people.length === 1 ? 'No podrá asistir.' : 'Nadie de esta invitación podrá asistir.';
+  const single = inv.people.length === 1;
+  if (d.none) return single ? 'No podrás asistir.' : 'Nadie de esta invitación podrá asistir.';
+  if (single) return 'Asistirás.';
   const n = d.ids.length;
-  return `${n === 1 ? 'Asistirá 1 persona' : `Asistirán ${n} personas`} de ${lugares(inv.seats ?? 0)} reservados.`;
+  const r = reservedOf(inv);
+  const who = n === 1 ? 'Asistirá 1 persona' : `Asistirán ${n} personas`;
+  return r ? `${who} de ${lugares(r)} ${r === 1 ? 'reservado' : 'reservados'}.` : `${who}.`;
 }
 
 function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; invitation: PublicInvitation; onChanged: (inv: PublicInvitation) => void; mode: UiMode }) {
@@ -119,7 +142,7 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
   const [draft, setDraft] = useState<Draft>(() => draftFrom(invitation));
   const [hint, setHint] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; uncertain: boolean } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [conflict, setConflict] = useState<PublicInvitation | null>(null);
   const [justSaved, setJustSaved] = useState(false);
@@ -127,24 +150,33 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
   const inFlight = useRef(false);
   const reviewRef = useRef<HTMLHeadingElement>(null);
   const alertRef = useRef<HTMLDivElement>(null);
-  const savedRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const savedHeadingRef = useRef<HTMLHeadingElement>(null);
+  /** A dónde llevar el foco después de un cambio de vista, para no dejarlo en <body>. */
+  const focusNext = useRef<'heading' | 'saved' | null>(null);
 
   useEffect(() => {
-    if (step === 'review' && !error && !conflict) reviewRef.current?.focus();
+    if (step === 'review' && !error && !conflict) focusInView(reviewRef.current);
   }, [step, error, conflict]);
   useEffect(() => {
     if (error || conflict) alertRef.current?.focus();
   }, [error, conflict]);
   useEffect(() => {
-    if (justSaved) savedRef.current?.focus();
+    if (justSaved) focusInView(savedHeadingRef.current);
   }, [justSaved]);
+  useEffect(() => {
+    const target = focusNext.current;
+    if (!target) return;
+    focusNext.current = null;
+    focusInView(target === 'saved' ? savedHeadingRef.current : headingRef.current);
+  });
 
   const header = (
     <>
-      <h3>{invitation.name}</h3>
-      <p className="seats">
-        {seats === 1 ? 'Hemos reservado 1 lugar para ti.' : seats ? `Hemos reservado ${seats} lugares para ustedes.` : null}
-      </p>
+      <h3 ref={headingRef} tabIndex={-1}>
+        {invitation.name}
+      </h3>
+      <p className="seats">{seatsText(invitation)}</p>
     </>
   );
 
@@ -176,10 +208,13 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
   if (!editing && invitation.response) {
     const r = invitation.response;
     const names = r.status === 'attending' ? namesOf(invitation, r.personIds) : [];
+    const updating = invitation.closedReason === 'seats_unassigned' || invitation.closedReason === 'no_people';
     return (
-      <div className="rsvp-card saved" ref={savedRef} tabIndex={-1} aria-live="polite" data-testid="rsvp-saved">
+      <div className="rsvp-card saved" data-testid="rsvp-saved">
         <CheckCircleIcon className="check" />
-        <h3>{justSaved ? '¡Gracias! Recibimos tu respuesta' : 'Tu respuesta está registrada'}</h3>
+        <h3 ref={savedHeadingRef} tabIndex={-1}>
+          {justSaved ? '¡Gracias! Recibimos tu respuesta' : 'Tu respuesta está registrada'}
+        </h3>
         {mode === 'demo' ? <p className="demo-note">Demostración: es una respuesta de prueba.</p> : null}
         <p className="summary">{summaryLine(invitation, { none: r.status === 'declined', ids: r.personIds })}</p>
         {names.length ? (
@@ -199,13 +234,18 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
                 setJustSaved(false);
                 resetDraft();
                 setEditing(true);
+                focusNext.current = 'heading';
               }}
             >
               Cambiar mi respuesta
             </button>
           </div>
         ) : (
-          <p style={{ marginTop: 16 }}>La confirmación ya está cerrada. Si necesitas un cambio, escríbenos.</p>
+          <p style={{ marginTop: 16 }}>
+            {updating
+              ? 'Estamos actualizando los detalles de tu invitación; muy pronto podrás cambiar tu respuesta desde este enlace.'
+              : 'La confirmación ya está cerrada. Si necesitas un cambio, escríbenos.'}
+          </p>
         )}
       </div>
     );
@@ -271,8 +311,25 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
         requestId.current = null;
         setConflict(current);
         onChanged(current);
+      } else if (err instanceof ApiFailure && REFRESH_CODES.includes(err.code)) {
+        // La invitación cambió mientras la revisabas: se recarga y se vuelve a la selección.
+        requestId.current = null;
+        try {
+          const fresh = await fetchInvitation(token);
+          onChanged(fresh);
+          const active = new Set(fresh.people.map((p) => p.id));
+          setDraft((d) => ({ none: d.none, ids: d.ids.filter((id) => active.has(id)) }));
+          setNotice(`${err.message} Revisa tu selección.`);
+          setStep('select');
+          if (!fresh.canRespond) setEditing(false);
+          focusNext.current = fresh.canRespond ? 'heading' : 'saved';
+        } catch {
+          setError({ message: err.message, uncertain: false });
+        }
       } else {
-        setError(err instanceof ApiFailure ? err.message : 'Ocurrió un error inesperado.');
+        // Sin respuesta del servidor (red o 5xx) no sabemos si se guardó; un 4xx sí se rechazó.
+        const uncertain = !(err instanceof ApiFailure) || err.status === 0 || err.status >= 500 || err.code === 'server';
+        setError({ message: err instanceof ApiFailure ? err.message : 'Ocurrió un error inesperado.', uncertain });
       }
     } finally {
       inFlight.current = false;
@@ -303,8 +360,9 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
 
         {conflict ? (
           <div className="alert alert-error" role="alert" ref={alertRef} tabIndex={-1} data-testid="rsvp-conflict">
-            <strong>Esta invitación cambió desde otro dispositivo</strong>
-            Mientras revisabas, alguien guardó otra respuesta con este mismo enlace. Tu selección no se ha guardado.
+            <strong>Hay una respuesta más reciente</strong>
+            Mientras revisabas, se guardó otra respuesta con este mismo enlace (desde otro dispositivo o en un intento anterior). Tu selección no se ha
+            guardado.
             <span className="conflict-line">
               Respuesta vigente:{' '}
               {conflict.response
@@ -316,8 +374,8 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
         ) : null}
         {error ? (
           <div className="alert alert-error" role="alert" id="rsvp-error" ref={alertRef} tabIndex={-1}>
-            <strong>Tu respuesta no se ha guardado</strong>
-            {error} Tu selección sigue aquí.
+            <strong>{error.uncertain ? 'No sabemos si se guardó tu respuesta' : 'Tu respuesta no se ha guardado'}</strong>
+            {error.message} Tu selección sigue aquí.
           </div>
         ) : null}
         {notice ? (
@@ -338,13 +396,21 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
               onClick={() => {
                 resetDraft(conflict);
                 setEditing(!conflict.response);
+                focusNext.current = conflict.response ? 'saved' : 'heading';
               }}
             >
               Conservar la respuesta vigente
             </button>
           ) : null}
           {!saving ? (
-            <button type="button" className="btn-link" onClick={() => setStep('select')}>
+            <button
+              type="button"
+              className="btn-link"
+              onClick={() => {
+                setStep('select');
+                focusNext.current = 'heading';
+              }}
+            >
               Cambiar selección
             </button>
           ) : null}
@@ -357,7 +423,12 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
     <form className="rsvp-card" onSubmit={toReview} noValidate data-testid="rsvp-form">
       {header}
       {deadline ? <p className="muted">{deadline}</p> : null}
-      <fieldset>
+      {notice ? (
+        <div className="alert alert-info" role="status">
+          {notice}
+        </div>
+      ) : null}
+      <fieldset aria-describedby={!canSelectAll ? 'rsvp-limit' : undefined}>
         <legend>{single ? 'Marca tu nombre si asistirás' : '¿Quiénes asistirán?'}</legend>
         <div className="choice-grid">
           {people.map((p) => {
@@ -376,22 +447,22 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
           </button>
         ) : null}
         {!canSelectAll ? (
-          <p className="muted small" style={{ marginTop: 10 }}>
-            Pueden confirmar hasta {lugares(seats)} de las {people.length} personas de la lista.
+          <p className="muted small" id="rsvp-limit" style={{ marginTop: 10 }}>
+            Pueden confirmar a un máximo de {seats} de las {people.length} personas.
+            {atLimit ? ' Ya marcaron todos los lugares reservados.' : ''}
           </p>
         ) : null}
+        <div className="choice-grid choice-none-row">
+          <label className="choice choice-check choice-none">
+            <input type="checkbox" checked={draft.none} onChange={(e) => touch({ none: e.target.checked, ids: [] })} />
+            {single ? 'No podré asistir' : 'Ninguno de nosotros podrá asistir'}
+          </label>
+        </div>
       </fieldset>
-      <div className="choice-grid" style={{ marginBottom: 22 }}>
-        <label className="choice choice-check choice-none">
-          <input type="checkbox" checked={draft.none} onChange={(e) => touch({ none: e.target.checked, ids: [] })} />
-          {single ? 'No podré asistir' : 'Ninguno de nosotros podrá asistir'}
-        </label>
-      </div>
-      {hint ? (
-        <p className="form-hint" role="status">
-          {hint}
-        </p>
-      ) : null}
+      {/* Región siempre presente: así los lectores de pantalla anuncian la pista cuando aparece. */}
+      <p className="form-hint" role="status" aria-live="polite">
+        {hint}
+      </p>
       <button type="submit" className="btn btn-primary btn-block">
         Revisar respuesta
       </button>
@@ -403,6 +474,7 @@ function PeopleRsvp({ token, invitation, onChanged, mode }: { token: string; inv
             onClick={() => {
               resetDraft();
               setEditing(false);
+              focusNext.current = 'saved';
             }}
           >
             Cancelar cambio

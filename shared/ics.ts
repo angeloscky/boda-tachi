@@ -1,4 +1,4 @@
-import { EVENT } from '../../shared/event';
+import { EVENT } from './event.js';
 
 /**
  * Archivo .ics con la ceremonia y la recepción (horas en UTC: CDMX es UTC−6).

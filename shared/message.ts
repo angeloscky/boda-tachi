@@ -14,19 +14,27 @@ export const INVITE_TEMPLATE = [
   'Sofía e Isaac',
 ].join('\n');
 
-export function seatsLine(seats: number | null): string {
+/**
+ * Lugares que la familia puede usar: el cupo, sin pasar del número de personas autorizadas activas.
+ * Singular o plural según las personas de la invitación (no según el cupo).
+ */
+export function seatsLine(seats: number | null, people?: number): string {
   if (!seats) return '';
-  return seats === 1 ? 'Hemos reservado 1 lugar para ti.' : `Hemos reservado ${seats} lugares para ustedes.`;
+  const reserved = people === undefined ? seats : Math.min(seats, people);
+  if (reserved < 1) return '';
+  const forYou = (people ?? seats) === 1 ? 'para ti' : 'para ustedes';
+  return reserved === 1 ? `Hemos reservado 1 lugar ${forYou}.` : `Hemos reservado ${reserved} lugares ${forYou}.`;
 }
 
-export function buildInviteMessage(input: { name: string; seats: number | null; link: string }, template = INVITE_TEMPLATE): string {
+export function buildInviteMessage(input: { name: string; seats: number | null; people?: number; link: string }, template = INVITE_TEMPLATE): string {
+  const single = (input.people ?? input.seats) === 1;
   return template
     .replaceAll('{nombre}', input.name)
     .replaceAll('{fecha}', EVENT.dateLabel)
-    .replaceAll('{invitarte}', input.seats === 1 ? 'invitarte' : 'invitarlos')
-    .replaceAll('{tu}', input.seats === 1 ? 'tu' : 'su')
+    .replaceAll('{invitarte}', single ? 'invitarte' : 'invitarlos')
+    .replaceAll('{tu}', single ? 'tu' : 'su')
     .replaceAll('{enlace}', input.link)
-    .replaceAll('{lugares}', seatsLine(input.seats))
+    .replaceAll('{lugares}', seatsLine(input.seats, input.people))
     .replace(/\n{3,}/g, '\n\n');
 }
 

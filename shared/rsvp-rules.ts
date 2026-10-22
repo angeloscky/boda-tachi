@@ -18,8 +18,10 @@ export const LIVE_TOKEN_RE = /^[A-Za-z0-9_-]{24}$/;
 export const DEMO_TOKEN_RE = /^demo_[A-Za-z0-9_-]{24}$/;
 /** Identificador de solicitud que genera el navegador para reintentar sin duplicar. */
 export const REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
-/** IDs reservados para datos ficticios. */
-export const DEMO_ID_RE = /^demo[-_]/i;
+/** IDs reservados para datos ficticios (demostración y filas de ejemplo de las plantillas). */
+export const DEMO_ID_RE = /^(demo|ejemplo)[-_]/i;
+/** Valor que el menú escribe en la columna token al revocar un enlace. */
+export const REVOKED_TOKEN = 'revocado';
 
 export const SIDES = ['novia', 'novio', 'ambos'] as const;
 export type Side = (typeof SIDES)[number];
@@ -35,6 +37,8 @@ export interface InvitationRecord {
   active: boolean;
   token: string | null;
   notes: string | null;
+  /** En la hoja: enlace revocado a propósito (no se vuelve a generar solo). */
+  revoked?: boolean;
 }
 
 export interface PersonRecord {
@@ -127,6 +131,11 @@ export interface RsvpContext {
   current: ResponseRecord | null;
   rsvpOpen: boolean;
   now: string;
+  /**
+   * Revisión sin respuesta vigente (0 si nunca hubo). Al borrar una respuesta, la revisión
+   * no vuelve a 0: así un dispositivo que vio la respuesta borrada recibe un conflicto.
+   */
+  baseRevision?: number;
 }
 
 export type RsvpDecision =
@@ -150,7 +159,11 @@ const sameIds = (a: string[], b: string[]) => {
 export function decideRsvp(ctx: RsvpContext, req: RsvpRequest): RsvpDecision {
   const { invitation, current } = ctx;
   if (!invitation.active) return fail(404, 'not_found', NOT_FOUND_MESSAGE);
-  if (current && current.requestId === req.requestId) return { ok: true, action: 'replay', response: current };
+  if (current && current.requestId === req.requestId) {
+    // Repetir la misma solicitud no duplica; reutilizar su ID con otra selección es un error, no un éxito.
+    if (current.status === req.status && sameIds(current.personIds, req.personIds)) return { ok: true, action: 'replay', response: current };
+    return fail(409, 'request_id_reused', 'Esta solicitud ya se usó con otra selección. Revisa tu respuesta y vuelve a guardarla.');
+  }
   if (!ctx.rsvpOpen) return fail(409, 'rsvp_closed', 'La confirmación de asistencia ya está cerrada.');
   if (invitation.seats === null) {
     return fail(409, 'seats_unassigned', 'Esta invitación aún no tiene lugares asignados.');
@@ -178,7 +191,7 @@ export function decideRsvp(ctx: RsvpContext, req: RsvpRequest): RsvpDecision {
   if (current && current.status === req.status && sameIds(current.personIds, personIds)) {
     return { ok: true, action: 'unchanged', response: current };
   }
-  const currentRevision = current ? current.revision : 0;
+  const currentRevision = current ? current.revision : (ctx.baseRevision ?? 0);
   if (req.expectedRevision !== currentRevision) {
     return {
       ...fail(409, 'conflict', 'Esta invitación se actualizó desde otro dispositivo mientras la revisabas.'),
@@ -218,6 +231,7 @@ export function toGuestView(
   people: PersonRecord[],
   current: ResponseRecord | null,
   rsvpOpen: boolean,
+  baseRevision = 0,
 ): GuestView {
   const active = people.filter((p) => p.active);
   const activeKeys = new Set(active.map((p) => key(p.id)));
@@ -228,7 +242,7 @@ export function toGuestView(
     name: invitation.group,
     seats: invitation.seats,
     people: active.map((p) => ({ id: p.id, name: p.name })),
-    revision: current ? current.revision : 0,
+    revision: current ? current.revision : baseRevision,
     response: current
       ? { status: current.status, personIds: selected, attending: current.status === 'attending' ? selected.length : 0, updatedAt: current.updatedAt }
       : null,
@@ -305,10 +319,12 @@ export function parseInvitationRow(raw: Record<string, unknown>): RowResult<Invi
   }
   const active = parseBool(raw.active, true);
   if (active === null) errors.push('La columna "activa" debe ser sí o no.');
-  if (tokenRaw && !LIVE_TOKEN_RE.test(tokenRaw) && !DEMO_TOKEN_RE.test(tokenRaw)) errors.push('El token no tiene el formato esperado.');
+  const revoked = tokenRaw.toLowerCase() === REVOKED_TOKEN;
+  if (tokenRaw && !revoked && !LIVE_TOKEN_RE.test(tokenRaw) && !DEMO_TOKEN_RE.test(tokenRaw)) errors.push('El token no tiene el formato esperado.');
   if (notes.length > 500) errors.push('Las notas son demasiado largas (máximo 500 caracteres).');
   return {
-    value: { id, group, side, contact: contact || null, phone, seats, active: active !== false, token: tokenRaw || null, notes: notes || null },
+    // Un valor de "activa" no reconocido cuenta como inactiva (y se reporta como error).
+    value: { id, group, side, contact: contact || null, phone, seats, active: active === true, token: revoked ? null : tokenRaw || null, notes: notes || null, revoked },
     errors,
     warnings,
   };
@@ -326,7 +342,7 @@ export function parsePersonRow(raw: Record<string, unknown>): RowResult<PersonRe
   else if (name.length > 120) errors.push('El nombre es demasiado largo (máximo 120 caracteres).');
   const active = parseBool(raw.active, true);
   if (active === null) errors.push('La columna "activa" debe ser sí o no.');
-  return { value: { id, invitationId, name, active: active !== false }, errors, warnings: [] };
+  return { value: { id, invitationId, name, active: active === true }, errors, warnings: [] };
 }
 
 /**
@@ -432,7 +448,8 @@ export function checkRoster(
       const other = tokens.get(inv.token);
       if (other) add('error', 'Invitaciones', inv.id, `Token repetido (también en ${other}).`);
       else tokens.set(inv.token, inv.id);
-    } else if (inv.active) add('warning', 'Invitaciones', inv.id, 'Sin enlace personal todavía.');
+    } else if (inv.revoked) add('warning', 'Invitaciones', inv.id, 'Enlace revocado: genera uno nuevo con el menú si corresponde.');
+    else if (inv.active) add('warning', 'Invitaciones', inv.id, 'Sin enlace personal todavía.');
     if (inv.phone) {
       const other = phones.get(inv.phone);
       if (other) add('warning', 'Invitaciones', inv.id, `Mismo teléfono que ${other}; se mantienen como invitaciones distintas.`);
@@ -453,6 +470,8 @@ export function checkRoster(
     if (!n) add('warning', 'Invitaciones', inv.id, 'Sin personas autorizadas: no podrá confirmar asistencia.');
     else if (inv.seats !== null && n > inv.seats) {
       add('warning', 'Invitaciones', inv.id, `${n} personas autorizadas y cupo de ${inv.seats}: solo podrán confirmar ${inv.seats}.`);
+    } else if (inv.seats !== null && n < inv.seats) {
+      add('warning', 'Invitaciones', inv.id, `Cupo de ${inv.seats} y ${n === 1 ? '1 persona autorizada' : `${n} personas autorizadas`}: el cupo extra no se puede usar (la invitación es intransferible).`);
     }
   }
   const responded = new Set<string>();
@@ -474,6 +493,49 @@ export function checkRoster(
       add('error', 'Respuestas', r.invitationId, `Confirma ${r.personIds.length} personas con cupo de ${inv.seats}.`);
     }
   }
+  return issues;
+}
+
+export const REVIEW_MESSAGE = 'Tu invitación tiene un detalle pendiente de revisar. Escríbenos y lo resolvemos.';
+
+interface SheetRows {
+  invitations: RowResult<InvitationRecord>[];
+  people: RowResult<PersonRecord>[];
+  responses: RowResult<ResponseRecord>[];
+}
+
+/**
+ * Problemas de la hoja que impiden atender a una invitación sin arriesgar los datos de otra.
+ * La hoja se edita a mano, así que antes de leer o escribir se exige: su fila sin errores,
+ * su ID único, sus personas válidas y exclusivas, y a lo sumo una respuesta válida.
+ * Lista vacía = se puede atender.
+ */
+export function invitationBlockers(target: RowResult<InvitationRecord>, rows: SheetRows): string[] {
+  const out: string[] = [];
+  const id = key(target.value.id);
+  if (target.errors.length) out.push(`Invitación ${target.value.id}: ${target.errors.join(' ')}`);
+  if (rows.invitations.filter((r) => key(r.value.id) === id).length > 1) out.push(`ID de invitación repetido: ${target.value.id}.`);
+  const own = rows.people.filter((r) => key(r.value.invitationId) === id);
+  for (const p of own) {
+    if (p.errors.length) out.push(`Persona ${p.value.id || '(sin ID)'}: ${p.errors.join(' ')}`);
+    const sameId = rows.people.filter((r) => key(r.value.id) === key(p.value.id));
+    if (sameId.length > 1) out.push(`ID de persona repetido: ${p.value.id}.`);
+  }
+  const responses = rows.responses.filter((r) => key(r.value.invitationId) === id);
+  if (responses.length > 1) out.push('Hay más de una respuesta para esta invitación.');
+  else if (responses.length === 1 && responses[0].errors.length) out.push(`Respuesta: ${responses[0].errors.join(' ')}`);
+  return out;
+}
+
+/** Errores de formato de cada fila, para la revisión de la lista y el panel. */
+export function rowIssues(rows: SheetRows): RosterIssue[] {
+  const issues: RosterIssue[] = [];
+  const push = (tab: RosterIssue['tab'], id: string, errors: string[]) => {
+    for (const message of errors) issues.push({ severity: 'error', tab, id: id || '(sin ID)', message });
+  };
+  rows.invitations.forEach((r) => push('Invitaciones', r.value.id, r.errors));
+  rows.people.forEach((r) => push('Personas', r.value.id, r.errors));
+  rows.responses.forEach((r) => push('Respuestas', r.value.invitationId, r.errors));
   return issues;
 }
 

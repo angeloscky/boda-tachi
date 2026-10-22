@@ -1,12 +1,12 @@
 ﻿id_persona,id_invitacion,nombre,activa
-INV-001-P1,INV-001,Ana Robles Ejemplo,sí
-INV-001-P2,INV-001,Luis Robles Ejemplo,sí
-INV-001-P3,INV-001,Sara Robles Ejemplo,sí
-INV-001-P4,INV-001,Tomás Robles Ejemplo,sí
-INV-002-P1,INV-002,Julián Prado Ficticio,sí
-INV-002-P2,INV-002,Carmen Prado Ficticia,sí
-INV-003-P1,INV-003,Marina Luna Prueba,sí
-INV-004-P1,INV-004,Inés Sol Muestra,sí
-INV-004-P2,INV-004,Raúl Sol Muestra,sí
-INV-004-P3,INV-004,Paula Sol Muestra,sí
-INV-004-P4,INV-004,Diego Sol Muestra,sí
+EJEMPLO-001-P1,EJEMPLO-001,Ana Robles Ejemplo,sí
+EJEMPLO-001-P2,EJEMPLO-001,Luis Robles Ejemplo,sí
+EJEMPLO-001-P3,EJEMPLO-001,Sara Robles Ejemplo,sí
+EJEMPLO-001-P4,EJEMPLO-001,Tomás Robles Ejemplo,sí
+EJEMPLO-002-P1,EJEMPLO-002,Julián Prado Ficticio,sí
+EJEMPLO-002-P2,EJEMPLO-002,Carmen Prado Ficticia,sí
+EJEMPLO-003-P1,EJEMPLO-003,Marina Luna Prueba,sí
+EJEMPLO-004-P1,EJEMPLO-004,Inés Sol Muestra,sí
+EJEMPLO-004-P2,EJEMPLO-004,Raúl Sol Muestra,sí
+EJEMPLO-004-P3,EJEMPLO-004,Paula Sol Muestra,sí
+EJEMPLO-004-P4,EJEMPLO-004,Diego Sol Muestra,sí

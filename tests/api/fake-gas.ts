@@ -42,6 +42,10 @@ export class FakeSheet {
     if (!this.dropWrites) this.values.push([...arr]);
   }
   setFrozenRows() {}
+  clearContents() {
+    this.values = [];
+    return this;
+  }
   protect() {
     return protection;
   }
@@ -106,7 +110,7 @@ export function createGas(tabs: Record<string, unknown[][]>, opts: { secret?: st
   const props: Record<string, string | null> = { BT_SHARED_SECRET: opts.secret === undefined ? SECRET : opts.secret };
   const ss = { getSheetByName: (n: string) => sheets.get(n) ?? null, insertSheet: (n: string) => sheets.set(n, new FakeSheet(n, [])).get(n) };
   const ctx: Record<string, unknown> = {
-    SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush: () => {} },
+    SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush: () => {}, getUi: () => ({ alert: () => {} }) },
     LockService: { getScriptLock: () => ({ tryLock: () => !lock.busy, releaseLock: () => {} }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: (k: string) => props[k] ?? null }) },
     CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string) => void cache.set(k, v) }) },
@@ -133,7 +137,9 @@ export function createGas(tabs: Record<string, unknown[][]>, opts: { secret?: st
   const code = fs.readFileSync(opts.codePath ?? path.resolve(__dirname, '../../apps-script/Code.gs'), 'utf8');
   vm.runInContext(code, ctx, { filename: 'Code.gs' });
   const doPost = (body: string) => JSON.parse((ctx.doPost as (e: unknown) => { getContent(): string })({ postData: { contents: body } }).getContent());
-  return { ctx, sheets, cache, lock, props, doPost };
+  /** Funciones internas del script (menú y escritura) para probarlas directamente. */
+  const fn = <T = unknown>(name: string, ...args: unknown[]) => (ctx[name] as (...a: unknown[]) => T)(...args);
+  return { ctx, ss, sheets, cache, lock, props, doPost, fn };
 }
 
 const resp = (status: number, body: string, headers: Record<string, string> = {}): FetchResponseLike => ({

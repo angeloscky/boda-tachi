@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { EVENT, CEREMONY_START, type Place } from '../../shared/event';
 import type { PublicInvitation } from '../../shared/types';
 import { ApiFailure, fetchInvitation } from '../lib/api';
 import { LOGO } from '../lib/brand';
-import { buildIcs } from '../lib/ics';
+import { buildIcs } from '../../shared/ics';
 import { Envelope } from '../components/Envelope';
 import { NonTransferableNote, Rsvp } from '../components/Rsvp';
 import { ShareGeneral } from '../components/ShareGeneral';
@@ -127,6 +127,7 @@ export default function InvitationPage({ token, staticDemo }: Props) {
   const [loadError, setLoadError] = useState<ApiFailure | null>(null);
   const [loading, setLoading] = useState(Boolean(token) && !staticDemo);
   const mainRef = useRef<HTMLElement>(null);
+  const focusMainAfterOpen = useRef(false);
   const countdown = useCountdown(CEREMONY_START);
   useReveal();
 
@@ -155,14 +156,31 @@ export default function InvitationPage({ token, staticDemo }: Props) {
       /* almacenamiento no disponible */
     }
     window.scrollTo({ top: 0 });
-    // Lleva el foco al contenido sin quitárselo a quien ya empezó a navegar con teclado.
-    requestAnimationFrame(() => {
-      const active = document.activeElement;
-      if (!active || active === document.body) mainRef.current?.focus({ preventScroll: true });
-    });
+    focusMainAfterOpen.current = true;
   }, []);
 
-  const icsHref = useMemo(() => `data:text/calendar;charset=utf-8,${encodeURIComponent(buildIcs())}`, []);
+  // Al quitar el sobre, el foco pasa al contenido en el mismo render (sin esperar un cuadro),
+  // para que la siguiente tecla Tab llegue al enlace "Ir a confirmar asistencia".
+  useLayoutEffect(() => {
+    if (!envelopeDone || !focusMainAfterOpen.current) return;
+    focusMainAfterOpen.current = false;
+    const active = document.activeElement;
+    if (!active || active === document.body) mainRef.current?.focus({ preventScroll: true });
+  }, [envelopeDone]);
+
+  // Con servidor, un archivo .ics real; en la vista estática, el mismo contenido en línea.
+  const icsHref = useMemo(() => (staticDemo ? `data:text/calendar;charset=utf-8,${encodeURIComponent(buildIcs())}` : '/calendario.ics'), [staticDemo]);
+
+  // La barra inferior se oculta mientras la confirmación está en pantalla, para no tapar sus botones.
+  const [navHidden, setNavHidden] = useState(false);
+  useEffect(() => {
+    if (!envelopeDone || typeof IntersectionObserver === 'undefined') return;
+    const target = document.getElementById('confirmar');
+    if (!target) return;
+    const io = new IntersectionObserver(([entry]) => setNavHidden(entry.isIntersecting), { rootMargin: '0px 0px -15% 0px' });
+    io.observe(target);
+    return () => io.disconnect();
+  }, [envelopeDone]);
   const gifts = EVENT.gifts;
 
   return (
@@ -193,6 +211,10 @@ export default function InvitationPage({ token, staticDemo }: Props) {
           {loadError?.status === 404 ? (
             <p className="not-found-note" role="note">
               No encontramos esta invitación personal. Revisa que el enlace esté completo o pídenos que te lo compartamos de nuevo.
+            </p>
+          ) : loadError && loadError.code !== 'rsvp_not_enabled' ? (
+            <p className="not-found-note" role="note">
+              No pudimos cargar tu invitación personal. Puedes ver los detalles de la boda; en la sección de confirmación puedes intentarlo de nuevo.
             </p>
           ) : null}
           <a className="scroll-cue" href="#invitacion">
@@ -378,7 +400,7 @@ export default function InvitationPage({ token, staticDemo }: Props) {
           <h2 id="t-compartir" className="sr-only">
             Compartir
           </h2>
-          <ShareGeneral personal={Boolean(token)} />
+          <ShareGeneral personal={Boolean(invitation)} />
         </section>
 
         <footer className="footer">
@@ -388,7 +410,7 @@ export default function InvitationPage({ token, staticDemo }: Props) {
       </main>
 
       {envelopeDone ? (
-        <nav className="bottom-nav" aria-label="Accesos rápidos">
+        <nav className={`bottom-nav${navHidden ? ' is-hidden' : ''}`} aria-label="Accesos rápidos">
           <a href="#ubicaciones">
             <PinIcon />
             Ubicaciones

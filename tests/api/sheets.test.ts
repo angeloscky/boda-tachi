@@ -7,6 +7,8 @@ import { createApp } from '../../server/app.js';
 import { CONNECTOR_VERSION, signingString } from '../../shared/rsvp-rules.js';
 import { buildAppsScript } from '../../scripts/build-apps-script.js';
 import { SECRET, TOKEN_A, TOKEN_B, WEBAPP_URL, createGas, fakeWebApp, sampleTabs } from './fake-gas.js';
+
+const TOKEN_C = 'tokenFamiliaC_5555555555';
 import { adminAgent, rsvpBody, testConfig } from './helpers.js';
 
 /** Servidor en modo Google Sheets hablando con el Code.gs real a través del doble. */
@@ -138,8 +140,83 @@ describe('conector de Google Sheets (Apps Script probado con dobles; sin conexi�
     expect((await request(app).get('/api/invitations/demo_AAAAAAAAAAAAAAAAAAAAAAAA')).status).toBe(404);
     expect(web.calls.length).toBe(before); // ni siquiera se consulta a Google
     expect((await request(app).get(`/api/invitations/${TOKEN_B}`)).status).toBe(404); // token repetido: no se adivina
-    tabs.Invitaciones[1][7] = ''; // revocado desde el menú
+  });
+
+  it('revocar desde el menú se respeta al generar enlaces; filas EJEMPLO/DEMO nunca reciben enlace ni se atienden', async () => {
+    const tabs = sampleTabs();
+    tabs.Invitaciones.push(['EJEMPLO-001', '', 'Familia Ejemplo Olvidada', '', '', 2, 'sí', TOKEN_C, '', '']);
+    tabs.Invitaciones.push(['EJEMPLO-002', '', 'Otra fila de ejemplo', '', '', 2, 'sí', '', '', '']);
+    tabs.Invitaciones.push(['INV-003', '', 'Familia Nueva', '', '', 2, 'sí', '', '', '']);
+    const { app, gas } = sheetsApp({ tabs });
+    expect((await request(app).get(`/api/invitations/${TOKEN_C}`)).status).toBe(404);
+    const inv = () => gas.sheets.get('Invitaciones')!.values;
+    expect(gas.fn('fillMissingTokens_', gas.ss)).toBe(1);
+    expect(inv().find((r) => r[0] === 'INV-003')![7]).toMatch(/^[A-Za-z0-9_-]{24}$/);
+    expect(inv().find((r) => r[0] === 'EJEMPLO-002')![7]).toBe('');
+    gas.fn('replaceToken_', gas.ss, 'INV-001', true);
+    expect(inv()[1][7]).toBe('revocado');
     expect((await request(app).get(`/api/invitations/${TOKEN_A}`)).status).toBe(404);
+    expect(gas.fn('fillMissingTokens_', gas.ss)).toBe(0); // no revive el enlace revocado
+    expect(inv()[1][7]).toBe('revocado');
+    const admin = await adminAgent(app);
+    const issues = JSON.stringify((await admin.get('/api/admin/backend')).body.issues);
+    expect(issues).toMatch(/Enlace revocado/);
+  });
+
+  it('ID de invitación repetido o persona compartida: no se atiende ni se escribe, se pide revisar', async () => {
+    const tabs = sampleTabs();
+    // Fila copiada de INV-001 sin cambiar el ID (en otras mayúsculas) y con su propio enlace.
+    tabs.Invitaciones.push(['inv-001', '', 'Familia Copiada', '', '', 1, 'sí', TOKEN_C, '', '']);
+    const { app, responses } = sheetsApp({ tabs });
+    for (const token of [TOKEN_C, TOKEN_A]) {
+      const get = await request(app).get(`/api/invitations/${token}`);
+      expect(get.status, token).toBe(409);
+      expect(get.body.error).toBe('needs_review');
+      expect(JSON.stringify(get.body)).not.toMatch(/Ana Ejemplo|Familia Ejemplo A/);
+      const put = await request(app).put(`/api/invitations/${token}/rsvp`).send(rsvpBody([]));
+      expect(put.status).toBe(409);
+    }
+    expect(responses()).toEqual([]);
+    expect((await request(app).get(`/api/invitations/${TOKEN_B}`)).status).toBe(200); // las demás siguen
+
+    const shared = sampleTabs();
+    shared.Personas.push(['INV-001-P1', 'INV-002', 'Persona en dos invitaciones', 'sí']);
+    const other = sheetsApp({ tabs: shared });
+    expect((await request(other.app).get(`/api/invitations/${TOKEN_A}`)).body.error).toBe('needs_review');
+    expect((await request(other.app).get(`/api/invitations/${TOKEN_B}`)).body.error).toBe('needs_review');
+  });
+
+  it('"activa" no reconocida o una respuesta mal capturada a mano: se pide revisar y no cuenta en los totales', async () => {
+    const tabs = sampleTabs();
+    tabs.Personas[2][3] = 'baja'; // INV-001-P2
+    tabs.Respuestas.push(['INV-002', 'INV-002-P1', 'sí', '1', '2027-01-15T19:20:00-06:00', 'a-mano-0001']);
+    const { app } = sheetsApp({ tabs });
+    for (const token of [TOKEN_A, TOKEN_B]) {
+      const get = await request(app).get(`/api/invitations/${token}`);
+      expect(get.status, token).toBe(409);
+      expect(get.body.error).toBe('needs_review');
+      expect(get.body.response).toBeUndefined();
+    }
+    const admin = await adminAgent(app);
+    const status = (await admin.get('/api/admin/backend')).body;
+    expect(status.summary).toMatchObject({ attending: 0, declined: 0, pending: 2 });
+    const issues = status.issues.map((i: { id: string; message: string }) => `${i.id}: ${i.message}`).join('\n');
+    expect(issues).toMatch(/INV-001-P2: La columna "activa" debe ser sí o no/);
+    expect(issues).toMatch(/INV-002: El estado debe ser "asistirá" o "no asistirá"/);
+  });
+
+  it('la escritura no pisa una fila de Respuestas que cambió de lugar; el Resumen usa las reglas del servidor', async () => {
+    const tabs = sampleTabs();
+    tabs.Respuestas.push(['INV-002', 'INV-002-P1', 'asistirá', '1', '2027-01-15T19:20:00-06:00', 'otra-familia-01']);
+    const gas = createGas(tabs);
+    const table = gas.fn('readTab_', gas.ss, (gas.ctx.BtRules as { RESPONSES_TAB: unknown }).RESPONSES_TAB);
+    const response = { invitationId: 'INV-001', personIds: ['INV-001-P1'], status: 'attending', revision: 1, updatedAt: 'x', requestId: 'r-000000001' };
+    expect(() => gas.fn('writeResponse_', table, 2, response)).toThrow(/cambió de lugar/);
+    expect(gas.sheets.get('Respuestas')!.values[1][0]).toBe('INV-002');
+
+    gas.fn('refreshSummary_', gas.ss);
+    const resumen = Object.fromEntries(gas.sheets.get('Resumen')!.values.filter((r) => r.length === 2));
+    expect(resumen).toMatchObject({ 'Invitaciones activas': 2, 'Cupo asignado': 6, 'Personas autorizadas activas': 5, 'Invitaciones que asistirán': 1, 'Personas confirmadas': 1 });
   });
 
   it('ordenar filas y mover columnas en la hoja no cambia identidades ni respuestas', async () => {

@@ -160,21 +160,49 @@ function invitations_(ss) {
   });
 }
 
-function people_(ss) {
+function peopleRows_(ss) {
   return readTab_(ss, BtRules.PEOPLE_TAB).rows.map(function (r) {
-    return BtRules.parsePersonRow(r.data).value;
+    return BtRules.parsePersonRow(r.data);
   });
 }
 
-function findInvitationByToken_(ss, token) {
-  var matches = invitations_(ss).filter(function (p) { return p.value.token === token && p.value.id && p.value.group; });
-  // Un token repetido es un error de la lista: no se adivina a qué familia pertenece.
-  return matches.length === 1 ? matches[0].value : null;
+function responseRows_(table) {
+  return table.rows.map(function (r) {
+    var parsed = BtRules.parseResponseRow(r.data);
+    parsed.row = r.row;
+    return parsed;
+  });
 }
 
-function peopleOf_(ss, invitationId) {
-  var k = invitationId.toLowerCase();
-  return BtRules.sortPeopleById(people_(ss).filter(function (p) { return p.id && p.invitationId.toLowerCase() === k; }));
+var valueOf_ = function (p) { return p.value; };
+
+/**
+ * Carga todo lo que una operación del invitado necesita, o el error que corresponde.
+ * La hoja se edita a mano: antes de servir o escribir se comprueba que esta invitación
+ * no comparte ID, personas ni respuesta con otra y que sus filas son válidas.
+ */
+function loadContext_(ss, token) {
+  var invRows = invitations_(ss);
+  var matches = invRows.filter(function (p) { return p.value.token === token && p.value.id; });
+  // Un token repetido es un error de la lista: no se adivina a qué familia pertenece.
+  if (matches.length !== 1) return { error: NOT_FOUND };
+  var target = matches[0];
+  var inv = target.value;
+  // Una fila de demostración o de ejemplo nunca se atiende como invitación real.
+  if (BtRules.DEMO_ID_RE.test(inv.id)) return { error: NOT_FOUND };
+  var peopleRows = peopleRows_(ss);
+  var table = readTab_(ss, BtRules.RESPONSES_TAB);
+  var responseRows = responseRows_(table);
+  var blockers = BtRules.invitationBlockers(target, { invitations: invRows, people: peopleRows, responses: responseRows });
+  if (blockers.length) {
+    console.error('Invitación ' + inv.id + ' sin atender hasta revisar la hoja: ' + blockers.join(' | '));
+    return { error: NEEDS_REVIEW };
+  }
+  if (!inv.active) return { error: NOT_FOUND };
+  var k = inv.id.toLowerCase();
+  var people = BtRules.sortPeopleById(peopleRows.map(valueOf_).filter(function (p) { return p.invitationId.toLowerCase() === k; }));
+  var own = responseRows.filter(function (r) { return r.value.invitationId.toLowerCase() === k; });
+  return { inv: inv, people: people, table: table, row: own.length ? own[0].row : null, current: own.length ? own[0].value : null };
 }
 
 function responsesOf_(table, invitationId) {
@@ -201,6 +229,8 @@ function nowIso_() {
 }
 
 var NOT_FOUND = { ok: false, status: 404, code: 'not_found', message: BtRules.NOT_FOUND_MESSAGE };
+// Datos de la hoja que hay que corregir a mano: no es reintentable ni se adivina.
+var NEEDS_REVIEW = { ok: false, status: 409, code: 'needs_review', message: BtRules.REVIEW_MESSAGE };
 
 function activePeople_(people) {
   return people.filter(function (p) { return p.active; });
@@ -217,13 +247,9 @@ function getInvitation_(token) {
   if (typeof token !== 'string' || !BtRules.LIVE_TOKEN_RE.test(token)) return NOT_FOUND;
   try {
     var ss = ss_();
-    var inv = findInvitationByToken_(ss, token);
-    if (!inv || !inv.active) return NOT_FOUND;
-    var people = peopleOf_(ss, inv.id);
-    var found = responsesOf_(readTab_(ss, BtRules.RESPONSES_TAB), inv.id);
-    if (found.length > 1) return { ok: false, status: 500, code: 'duplicate_response', message: 'Hay más de una respuesta para esta invitación.', retryable: false };
-    var current = found.length ? BtRules.parseResponseRow(found[0].data).value : null;
-    return { ok: true, result: guestPayload_(inv, people, current, rsvpOpen_(ss)) };
+    var ctx = loadContext_(ss, token);
+    if (ctx.error) return ctx.error;
+    return { ok: true, result: guestPayload_(ctx.inv, ctx.people, ctx.current, rsvpOpen_(ss)) };
   } catch (err) {
     console.error(err);
     return { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'read_failed', message: String((err && err.message) || err), retryable: true };
@@ -240,18 +266,11 @@ function saveResponse_(token, request) {
   }
   try {
     var ss = ss_();
-    var inv = findInvitationByToken_(ss, token);
-    if (!inv || !inv.active) return NOT_FOUND;
-    var people = peopleOf_(ss, inv.id);
-    var table = readTab_(ss, BtRules.RESPONSES_TAB);
-    var found = responsesOf_(table, inv.id);
-    if (found.length > 1) return { ok: false, status: 500, code: 'duplicate_response', message: 'Hay más de una respuesta para esta invitación.', retryable: false };
-    var current = null;
-    if (found.length) {
-      var cur = BtRules.parseResponseRow(found[0].data);
-      if (cur.errors.length) return { ok: false, status: 500, code: 'invalid_response_row', message: cur.errors.join(' '), retryable: false };
-      current = cur.value;
-    }
+    var ctx = loadContext_(ss, token);
+    if (ctx.error) return ctx.error;
+    var inv = ctx.inv;
+    var people = ctx.people;
+    var current = ctx.current;
     var open = rsvpOpen_(ss);
     var decision = BtRules.decideRsvp(
       { invitation: { id: inv.id, seats: inv.seats, active: inv.active }, people: people, current: current, rsvpOpen: open, now: nowIso_() },
@@ -264,7 +283,7 @@ function saveResponse_(token, request) {
       return { ok: false, status: decision.status, code: decision.code, message: decision.message };
     }
     if (decision.action === 'write') {
-      writeResponse_(table, found.length ? found[0].row : null, decision.response);
+      writeResponse_(ctx.table, ctx.row, decision.response);
       SpreadsheetApp.flush();
       // Acuse verificable: se vuelve a leer la fila y debe coincidir con lo escrito.
       var check = responsesOf_(readTab_(ss, BtRules.RESPONSES_TAB), inv.id);
@@ -300,6 +319,11 @@ function writeResponse_(table, rowNumber, r) {
   var sheet = table.sheet;
   var width = table.width;
   var row = rowNumber ? sheet.getRange(rowNumber, 1, 1, width).getValues()[0] : new Array(width).fill('');
+  // Si alguien ordenó Respuestas a mano entre la lectura y la escritura, la fila ya no es la
+  // de esta invitación: se aborta (error reintentable) en lugar de pisar otra respuesta.
+  if (rowNumber && String(row[table.index.invitationId]).trim().toLowerCase() !== String(r.invitationId).toLowerCase()) {
+    throw new Error('La fila de la respuesta cambió de lugar durante la escritura.');
+  }
   for (var k in values) if (table.index[k] !== undefined) row[table.index[k]] = values[k];
   var target = rowNumber || sheet.getLastRow() + 1;
   var range = sheet.getRange(target, 1, 1, width);
@@ -307,11 +331,23 @@ function writeResponse_(table, rowNumber, r) {
   range.setValues([row]);
 }
 
+/**
+ * Registros de la hoja para totales y revisión. Las filas con errores de formato no se
+ * cuentan (se reportan como problemas): así una fila mal capturada no altera los totales.
+ */
 function allRecords_(ss) {
-  var invitations = invitations_(ss).map(function (p) { return p.value; }).filter(function (i) { return i.id; });
-  var people = people_(ss).filter(function (p) { return p.id; });
-  var responses = readTab_(ss, BtRules.RESPONSES_TAB).rows.map(function (r) { return BtRules.parseResponseRow(r.data).value; });
-  return { invitations: invitations, people: people, responses: responses };
+  var rows = { invitations: invitations_(ss), people: peopleRows_(ss), responses: responseRows_(readTab_(ss, BtRules.RESPONSES_TAB)) };
+  var valid = function (p) { return !p.errors.length; };
+  return {
+    invitations: rows.invitations.filter(valid).map(valueOf_),
+    people: rows.people.filter(valid).map(valueOf_),
+    responses: rows.responses.filter(valid).map(valueOf_),
+    issues: BtRules.rowIssues(rows),
+  };
+}
+
+function rosterIssues_(all) {
+  return all.issues.concat(BtRules.checkRoster(all.invitations, all.people, all.responses, { live: true }));
 }
 
 function summary_() {
@@ -319,8 +355,7 @@ function summary_() {
   var all = allRecords_(ss);
   var s = BtRules.summarize(all.invitations, all.people, all.responses);
   s.rsvpOpen = rsvpOpen_(ss);
-  var issues = BtRules.checkRoster(all.invitations, all.people, all.responses, { live: true });
-  return { ok: true, result: { summary: s, issues: issues.slice(0, 50) } };
+  return { ok: true, result: { summary: s, issues: rosterIssues_(all).slice(0, 50) } };
 }
 
 function checkStructure_(ss) {
@@ -352,7 +387,10 @@ function withLock_(fn) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(BT_LOCK_MS)) throw new Error('El registro está ocupado; inténtalo de nuevo en unos segundos.');
   try {
-    return fn();
+    var out = fn();
+    // Que la siguiente operación con el bloqueo ya lea estos cambios.
+    SpreadsheetApp.flush();
+    return out;
   } finally {
     lock.releaseLock();
   }
@@ -374,7 +412,8 @@ function fillMissingTokens_(ss) {
     var n = 0;
     table.rows.forEach(function (r) {
       var v = BtRules.parseInvitationRow(r.data).value;
-      if (v.id && v.group && v.active && !v.token) {
+      // No se generan enlaces para filas revocadas a propósito ni para filas de demostración o ejemplo.
+      if (v.id && v.group && v.active && !v.token && !v.revoked && !BtRules.DEMO_ID_RE.test(v.id)) {
         var t = newToken_(taken);
         taken[t] = true;
         setToken_(table, r.row, t);
@@ -385,7 +424,7 @@ function fillMissingTokens_(ss) {
   });
 }
 
-/** Regenera (nuevo token) o revoca (token vacío) el enlace de la invitación con ese ID. */
+/** Regenera (nuevo token) o revoca (marca "revocado", que "Generar enlaces faltantes" respeta) el enlace. */
 function replaceToken_(ss, invitationId, revoke) {
   return withLock_(function () {
     var table = readTab_(ss, BtRules.INVITATIONS_TAB);
@@ -394,7 +433,7 @@ function replaceToken_(ss, invitationId, revoke) {
     if (rows.length !== 1) throw new Error('No se encontró una sola invitación con el ID ' + invitationId + '.');
     var taken = {};
     table.rows.forEach(function (r) { if (r.data.token) taken[String(r.data.token)] = true; });
-    var token = revoke ? '' : newToken_(taken);
+    var token = revoke ? BtRules.REVOKED_TOKEN : newToken_(taken);
     setToken_(table, rows[0].row, token);
     return token;
   });
@@ -420,6 +459,7 @@ function onOpen() {
     .addItem('Revocar enlace de la fila seleccionada', 'btRevokeSelected')
     .addSeparator()
     .addItem('Revisar la lista', 'btCheck')
+    .addItem('Actualizar resumen', 'btRefreshSummary')
     .addItem('Cerrar confirmaciones', 'btCloseRsvp')
     .addItem('Abrir confirmaciones', 'btOpenRsvp')
     .addToUi();
@@ -458,8 +498,10 @@ function btRevokeSelected() {
 }
 
 function btCheck() {
-  var all = allRecords_(SpreadsheetApp.getActiveSpreadsheet());
-  var issues = BtRules.checkRoster(all.invitations, all.people, all.responses, { live: true });
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var all = allRecords_(ss);
+  var issues = rosterIssues_(all);
+  refreshSummary_(ss, all);
   var text = issues.length
     ? issues.slice(0, 40).map(function (i) { return (i.severity === 'error' ? 'ERROR · ' : 'Aviso · ') + i.tab + ' ' + i.id + ': ' + i.message; }).join('\n')
     : 'Sin problemas en la lista.';
@@ -517,7 +559,7 @@ function btSetup() {
   var open = configRow_(ss, keys.rsvpOpen.key);
   config.getRange(open.row, 2).insertCheckboxes();
   setupLinkFormula_(ss);
-  setupSummary_(ss);
+  refreshSummary_(ss);
   SpreadsheetApp.getUi().alert('Estructura lista. Escribe la dirección pública en Config → url_publica y usa "Generar enlaces faltantes".');
 }
 
@@ -539,27 +581,39 @@ function setupLinkFormula_(ss) {
   var url = configRow_(ss, BtRules.CONFIG_TAB.keys.publicUrl.key);
   var t = colLetter_(table.index.token);
   // Sintaxis en-US de Apps Script: "," separa argumentos y ";" separa filas del arreglo.
-  var formula = '={"enlace";ARRAYFORMULA(IF(LEN(' + t + '2:' + t + ')=0,"",Config!$B$' + url.row + '&"/i/"&' + t + '2:' + t + '))}';
+  // Solo tokens de 24 caracteres: una fila sin enlace o "revocado" queda vacía.
+  var formula = '={"enlace";ARRAYFORMULA(IF(LEN(' + t + '2:' + t + ')<>24,"",Config!$B$' + url.row + '&"/i/"&' + t + '2:' + t + '))}';
   table.sheet.getRange(1, table.index.link + 1).setFormula(formula);
 }
 
-/** Totales derivados de Respuestas e Invitaciones (fórmulas; no son otra copia de las respuestas). */
-function setupSummary_(ss) {
+/**
+ * Pestaña Resumen: valores calculados con las mismas reglas que el panel (BtRules.summarize),
+ * desde el registro vigente. No es otra copia de las respuestas: se recalcula con el menú.
+ */
+function refreshSummary_(ss, all) {
+  all = all || allRecords_(ss);
+  var s = BtRules.summarize(all.invitations, all.people, all.responses);
   var sheet = ss.getSheetByName(BtRules.SUMMARY_TAB) || ss.insertSheet(BtRules.SUMMARY_TAB);
-  var col = function (tab, header) {
-    return 'INDEX(' + tab + '!A2:Z,0,MATCH("' + header + '",' + tab + '!A1:Z1,0))';
-  };
-  var est = col('Respuestas', 'estado');
-  var per = col('Respuestas', 'personas_seleccionadas');
   var rows = [
     ['Indicador', 'Valor'],
-    ['Invitaciones activas', '=COUNTIFS(' + col('Invitaciones', 'id_invitacion') + ',"<>",' + col('Invitaciones', 'activa') + ',"<>no")'],
-    ['Cupo asignado', '=SUMIFS(' + col('Invitaciones', 'cupo') + ',' + col('Invitaciones', 'activa') + ',"<>no")'],
-    ['Personas autorizadas activas', '=COUNTIFS(' + col('Personas', 'id_persona') + ',"<>",' + col('Personas', 'activa') + ',"<>no")'],
-    ['Invitaciones que asistirán', '=COUNTIF(' + est + ',"asistirá")'],
-    ['Invitaciones que no asistirán', '=COUNTIF(' + est + ',"no asistirá")'],
-    ['Personas confirmadas', '=SUMPRODUCT((' + est + '="asistirá")*(LEN(TRIM(' + per + '))>0)*(LEN(' + per + ')-LEN(SUBSTITUTE(' + per + ',",",""))+1))'],
+    ['Invitaciones activas', s.invitations],
+    ['Invitaciones sin cupo asignado', s.incomplete],
+    ['Cupo asignado', s.seatsAssigned],
+    ['Personas autorizadas activas', s.people],
+    ['Invitaciones que asistirán', s.attending],
+    ['Invitaciones que no asistirán', s.declined],
+    ['Invitaciones sin respuesta', s.pending],
+    ['Personas confirmadas', s.attendingPeople],
+    ['Lugares sin usar en respuestas (deciden los novios)', s.unusedSeats],
+    ['Filas con problemas (ver "Revisar la lista")', all.issues.length],
+    ['Actualizado', nowIso_()],
   ];
+  sheet.clearContents();
   sheet.getRange(1, 1, rows.length, 2).setValues(rows);
-  sheet.getRange(rows.length + 2, 1).setValue('Fórmulas calculadas desde las pestañas; aquí no se escriben datos. El panel usa la operación summary, con las mismas reglas del servidor.');
+  sheet.getRange(rows.length + 2, 1).setValue('Calculado desde Invitaciones, Personas y Respuestas con las reglas del servidor. Menú Boda → Actualizar resumen.');
+}
+
+function btRefreshSummary() {
+  refreshSummary_(SpreadsheetApp.getActiveSpreadsheet());
+  SpreadsheetApp.getUi().alert('Resumen actualizado.');
 }

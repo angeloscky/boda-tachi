@@ -83,6 +83,11 @@ export function createLimiter(max: number, windowMs: number) {
       entry.count++;
       return entry.count <= max;
     },
+    /** Ya superó el máximo en la ventana actual (sin contar un intento nuevo). */
+    blocked(key: string): boolean {
+      const entry = hits.get(key);
+      return Boolean(entry && entry.reset >= Date.now() && entry.count >= max);
+    },
     reset(key: string) {
       hits.delete(key);
     },

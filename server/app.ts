@@ -27,6 +27,7 @@ import {
 } from './invitations.js';
 import { getProvider, waMeUrl, type MessagingProvider } from './messaging.js';
 import { buildInviteMessage } from '../shared/message.js';
+import { buildIcs } from '../shared/ics.js';
 import { parseRsvpRequest } from '../shared/rsvp-rules.js';
 import { TEMPLATES, type TemplateName } from '../shared/sheets-templates.js';
 import { toCsv } from './csv.js';
@@ -155,11 +156,13 @@ export function createApp(db: DB | null, config: AppConfig, opts: { provider?: M
       if (!loginLimiter.hit(ip(req))) {
         throw new HttpError(429, 'rate_limited', 'Demasiados intentos. Espera 15 minutos.');
       }
+      // El tope global se revisa antes de comprobar la contraseña: superado, ni la correcta entra.
+      if (globalLoginLimiter.blocked('global')) {
+        throw new HttpError(429, 'rate_limited', 'Demasiados intentos fallidos. Espera una hora.');
+      }
       const password = typeof req.body?.password === 'string' ? req.body.password : '';
       if (!password || !verifyPassword(password, passwordHash)) {
-        if (!globalLoginLimiter.hit('global')) {
-          throw new HttpError(429, 'rate_limited', 'Demasiados intentos fallidos. Espera una hora.');
-        }
+        globalLoginLimiter.hit('global');
         throw new HttpError(401, 'bad_credentials', 'Contraseña incorrecta.');
       }
       loginLimiter.reset(ip(req));
@@ -275,7 +278,7 @@ export function createApp(db: DB | null, config: AppConfig, opts: { provider?: M
   const messageFor = (inv: AdminInvitation) => {
     const link = linkFor(inv);
     if (!link) throw new HttpError(409, 'link_revoked', 'El enlace de esta invitación está revocado; genera uno nuevo antes de preparar el mensaje.');
-    const text = buildInviteMessage({ name: inv.name, seats: inv.seats, link });
+    const text = buildInviteMessage({ name: inv.name, seats: inv.seats, people: inv.people.filter((p) => p.active).length, link });
     return { id: inv.id, code: inv.code, name: inv.name, phone: inv.phone, seats: inv.seats, link, text, waUrl: waMeUrl(inv.phone, text), comm: inv.comm };
   };
   local.get('/messaging', (_req, res) => res.json({ provider: { id: provider.id, label: provider.label, sendsRealMessages: provider.sendsRealMessages } }));
@@ -329,6 +332,12 @@ export function createApp(db: DB | null, config: AppConfig, opts: { provider?: M
 
   app.use('/api/admin', admin);
   app.use('/api', (_req, res) => res.status(404).json({ error: 'not_found', message: 'Ruta no encontrada.' }));
+
+  // Calendario como archivo real: los navegadores dentro de WhatsApp suelen ignorar data: con download.
+  app.get('/calendario.ics', (_req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.type('text/calendar; charset=utf-8').attachment('boda-sofia-isaac.ics').send(buildIcs());
+  });
 
   // ------------------------------------------------------------ interfaz
   const indexFile = path.join(config.clientDir, 'index.html');

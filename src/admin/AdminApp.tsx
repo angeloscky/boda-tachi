@@ -495,18 +495,20 @@ function EditDialog({ row, onClose, onSaved }: { row: AdminRow | null; onClose: 
   const [people, setPeople] = useState<PersonDraft[]>(() => draftsOf(row));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState<'delete' | 'revoke' | null>(null);
+  const [confirm, setConfirm] = useState<'delete' | 'revoke' | 'regenerate' | null>(null);
   const set = (k: keyof typeof form) => (e: { target: { value: string; checked?: boolean; type?: string } }) =>
     setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? Boolean(e.target.checked) : e.target.value }));
 
-  async function run(fn: () => Promise<AdminRow | void>, msg: string, closeAfter = false) {
+  // Solo al guardar el formulario se reemplazan las personas en edición; las acciones de enlace
+  // o de respuesta conservan lo que se esté capturando.
+  async function run(fn: () => Promise<AdminRow | void>, msg: string, closeAfter = false, syncDrafts = false) {
     setBusy(true);
     setError(null);
     try {
       const out = await fn();
       if (out) {
         setCurrent(out);
-        setPeople(draftsOf(out));
+        if (syncDrafts) setPeople(draftsOf(out));
       }
       setConfirm(null);
       onSaved(msg);
@@ -534,6 +536,7 @@ function EditDialog({ row, onClose, onSaved }: { row: AdminRow | null; onClose: 
       () => (current ? adminApi.update(current.id, body) : adminApi.create(body)),
       current ? 'Cambios guardados' : 'Invitación creada; ya puedes copiar su enlace',
       Boolean(current),
+      true,
     );
   }
 
@@ -647,10 +650,22 @@ function EditDialog({ row, onClose, onSaved }: { row: AdminRow | null; onClose: 
                   </a>
                 </>
               ) : null}
-              <button className="adm-btn adm-btn-small adm-btn-ghost" disabled={busy} onClick={() => run(() => adminApi.regenerate(current.id), 'Enlace nuevo generado; el anterior ya no funciona')}>
-                Generar enlace nuevo
-              </button>
-              {current.link ? (
+              {confirm === 'regenerate' ? (
+                <>
+                  <span>{current.link ? '¿Generar uno nuevo? El enlace actual dejará de funcionar.' : '¿Generar un enlace nuevo?'}</span>
+                  <button className="adm-btn adm-btn-small adm-btn-primary" disabled={busy} onClick={() => run(() => adminApi.regenerate(current.id), current.link ? 'Enlace nuevo generado; el anterior ya no funciona' : 'Enlace nuevo generado')}>
+                    Sí, generar
+                  </button>
+                  <button className="adm-btn adm-btn-small adm-btn-ghost" onClick={() => setConfirm(null)}>
+                    Cancelar
+                  </button>
+                </>
+              ) : (
+                <button className="adm-btn adm-btn-small adm-btn-ghost" disabled={busy} onClick={() => setConfirm('regenerate')}>
+                  Generar enlace nuevo
+                </button>
+              )}
+              {current.link && confirm !== 'regenerate' ? (
                 confirm === 'revoke' ? (
                   <>
                     <span>¿Revocar? Dejará de funcionar.</span>

@@ -96,6 +96,22 @@ describe('confirmación por personas (demostración local)', () => {
     expect(retry.body.invitation).toMatchObject({ revision: 2, response: { status: 'declined', attending: 0 } });
   });
 
+  it('si el administrador borra la respuesta, un dispositivo atrasado recibe conflicto en vez de sobrescribir', async () => {
+    const { app } = makeApp();
+    const admin = await adminAgent(app);
+    const inv = await createInv(admin, { code: 'C-2', name: 'Familia Borrado', seats: 2, people: ['Uno Borrado', 'Dos Borrado'] });
+    const url = `/api/invitations/${inv.token}/rsvp`;
+    await request(app).put(url).send(rsvpBody([inv.people[0].id])).expect(200); // A guardó (revisión 1)
+    expect((await admin.delete(`/api/admin/invitations/${inv.id}/response`)).body).toMatchObject({ attendance: 'pending', revision: 2 });
+    const view = (await request(app).get(`/api/invitations/${inv.token}`)).body;
+    expect(view).toMatchObject({ revision: 2, response: null });
+    const b = await request(app).put(url).send(rsvpBody([inv.people[1].id], { expectedRevision: 2 })); // B partió de lo vigente
+    expect(b.body.invitation).toMatchObject({ revision: 3 });
+    const stale = await request(app).put(url).send(rsvpBody([], { expectedRevision: 1 })); // A con su vista vieja
+    expect(stale.status).toBe(409);
+    expect(stale.body.current.response.personIds).toEqual([inv.people[1].id]);
+  });
+
   it('un enlace revocado deja de funcionar; uno regenerado sí funciona', async () => {
     const { app } = makeApp();
     const admin = await adminAgent(app);

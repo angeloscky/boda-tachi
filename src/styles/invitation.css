@@ -639,6 +639,9 @@ a {
   font-size: 15px;
   color: #ece3b3;
 }
+.form-hint:empty {
+  margin: 0;
+}
 .not-found-note {
   margin-top: 28px;
   max-width: 340px;
@@ -812,7 +815,7 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 .envelope:focus-visible {
-  outline: 1px solid rgba(184, 190, 165, 0.5);
+  outline: 2px solid var(--olive-light);
   outline-offset: 10px;
 }
 .envelope .body,
@@ -1029,6 +1032,26 @@ a {
 }
 .choice-none {
   border-style: dashed;
+}
+.choice-none-row {
+  margin-top: 14px;
+}
+/* Encabezados que reciben el foco por programa (tras guardar, cambiar o cancelar). */
+.rsvp-card h3[tabindex='-1']:focus:not(:focus-visible),
+.rsvp-card h4[tabindex='-1']:focus:not(:focus-visible) {
+  outline: none;
+}
+/* La barra inferior se oculta mientras la confirmación está en pantalla: no tapa "Confirmar y guardar". */
+.bottom-nav {
+  transition:
+    transform 0.25s ease,
+    opacity 0.25s ease,
+    visibility 0.25s;
+}
+.bottom-nav.is-hidden {
+  transform: translate(-50%, 140%);
+  opacity: 0;
+  visibility: hidden;
 }
 .non-transferable {
   border-left: 2px solid var(--olive-light);

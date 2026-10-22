@@ -12,6 +12,7 @@
     "dev:api": "node --disable-warning=ExperimentalWarning --import tsx --watch server/index.ts --rsvp-backend=demo",
     "dev:web": "vite",
     "build": "vite build && tsc -p tsconfig.server.json",
+    "build:static": "vite build --mode static",
     "start": "node --disable-warning=ExperimentalWarning dist/server/server/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.tests.json",
     "test": "node --disable-warning=ExperimentalWarning node_modules/vitest/vitest.mjs run",

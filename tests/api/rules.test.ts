@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   checkRoster,
   decideRsvp,
+  invitationBlockers,
+  parseInvitationRow,
+  parsePersonRow,
+  parseResponseRow,
   parseRsvpRequest,
   summarize,
   toGuestView,
@@ -85,6 +89,46 @@ describe('reglas de confirmación (compartidas con Apps Script)', () => {
     expect(fresh).toMatchObject({ ok: true, action: 'write', response: { revision: 2, personIds: ['F1-P2'] } });
   });
 
+  it('reutilizar un requestId con otra selección es un error, no un éxito', () => {
+    const first = decideRsvp(ctx(), req(['F1-P1']));
+    if (!first.ok) throw new Error();
+    const current = first.response;
+    expect(decideRsvp(ctx({ current }), req(['f1-p1']))).toMatchObject({ ok: true, action: 'replay' });
+    expect(decideRsvp(ctx({ current }), req([]))).toMatchObject({ ok: false, status: 409, code: 'request_id_reused' });
+    expect(decideRsvp(ctx({ current }), req(['F1-P1', 'F1-P2'], { expectedRevision: 1 }))).toMatchObject({ code: 'request_id_reused' });
+  });
+
+  it('borrar una respuesta no reinicia la revisión: un dispositivo atrasado recibe conflicto', () => {
+    // La respuesta (revisión 1) se borró; la base queda en 2.
+    expect(decideRsvp(ctx({ baseRevision: 2 }), req(['F1-P1'], { expectedRevision: 1 }))).toMatchObject({ code: 'conflict' });
+    expect(decideRsvp(ctx({ baseRevision: 2 }), req(['F1-P1'], { expectedRevision: 2 }))).toMatchObject({ action: 'write', response: { revision: 3 } });
+    expect(toGuestView({ group: 'F', seats: 4 }, people, null, true, 2).revision).toBe(2);
+  });
+
+  it('filas de la hoja: "activa" no reconocida cuenta como inactiva; "revocado" no es un token', () => {
+    const p = parsePersonRow({ id: 'F1-P1', invitationId: 'F1', name: 'Ana', active: 'baja' });
+    expect(p.value.active).toBe(false);
+    expect(p.errors.join()).toMatch(/activa/);
+    const inv = parseInvitationRow({ id: 'F1', group: 'Familia', seats: 2, active: 'sí', token: 'Revocado' });
+    expect(inv.errors).toEqual([]);
+    expect(inv.value).toMatchObject({ token: null, revoked: true, active: true });
+    expect(parseInvitationRow({ id: 'F1', group: 'Familia', seats: 2, active: 'quizá' }).value.active).toBe(false);
+  });
+
+  it('en la hoja, una invitación con ID repetido, personas compartidas o respuesta inválida no se atiende', () => {
+    const inv = (id: string) => parseInvitationRow({ id, group: 'Familia', seats: 2, active: 'sí' });
+    const person = (id: string, invitationId: string, active = 'sí') => parsePersonRow({ id, invitationId, name: 'Nombre', active });
+    const resp = (invitationId: string, status: string) => parseResponseRow({ invitationId, personIds: '', status, revision: 1 });
+    const base = { invitations: [inv('F1'), inv('F2')], people: [person('F1-P1', 'F1'), person('F2-P1', 'F2')], responses: [] };
+    expect(invitationBlockers(base.invitations[0], base)).toEqual([]);
+    expect(invitationBlockers(base.invitations[0], { ...base, invitations: [...base.invitations, inv('f1')] })).toHaveLength(1);
+    expect(invitationBlockers(base.invitations[0], { ...base, people: [...base.people, person('F1-P1', 'F2')] })).toHaveLength(1);
+    expect(invitationBlockers(base.invitations[0], { ...base, people: [person('F1-P1', 'F1', 'baja')] })).toHaveLength(1);
+    expect(invitationBlockers(base.invitations[0], { ...base, responses: [resp('F1', 'sí')] })).toHaveLength(1);
+    expect(invitationBlockers(base.invitations[0], { ...base, responses: [resp('F1', 'no asistirá'), resp('F1', 'no asistirá')] })).toHaveLength(1);
+    expect(invitationBlockers(base.invitations[1], { ...base, responses: [resp('F1', 'sí')] })).toEqual([]);
+  });
+
   it('respeta el cierre, el cupo pendiente y la invitación inactiva', () => {
     expect(decideRsvp(ctx({ rsvpOpen: false }), req(['F1-P1']))).toMatchObject({ code: 'rsvp_closed' });
     expect(decideRsvp(ctx({ invitation: { id: 'F1', seats: null, active: true } }), req(['F1-P1']))).toMatchObject({ code: 'seats_unassigned' });
@@ -113,6 +157,7 @@ describe('reglas de confirmación (compartidas con Apps Script)', () => {
     expect(text).toMatch(/error:DEMO-9:Este ID es de demostración/);
     expect(text).toMatch(/error:P9:La invitación NO-EXISTE no existe/);
     expect(text).toMatch(/warning:INV-2:2 personas autorizadas y cupo de 1/);
+    expect(text).toMatch(/warning:INV-1:Cupo de 2 y 1 persona autorizada: el cupo extra no se puede usar/);
   });
 
   it('los totales salen del registro vigente', () => {

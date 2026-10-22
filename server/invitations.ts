@@ -59,6 +59,7 @@ interface InvRow {
   seats: number | null;
   enabled: number;
   notes: string | null;
+  revision_floor: number;
   created_at: string;
   updated_at: string;
   r_status: 'attending' | 'declined' | null;
@@ -158,7 +159,7 @@ function findByToken(db: DB, token: string): InvRow {
 
 function guestView(db: DB, row: InvRow): PublicInvitation {
   const people = personRecords(row, peopleOf(db, row.id));
-  return { ...toGuestView(invRecord(row), people, responseRecord(row), rsvpOpen(db)), mode: 'demo' };
+  return { ...toGuestView(invRecord(row), people, responseRecord(row), rsvpOpen(db), row.revision_floor), mode: 'demo' };
 }
 
 export function getGuestInvitation(db: DB, token: string): PublicInvitation {
@@ -176,6 +177,7 @@ export function saveGuestResponse(db: DB, token: string, req: RsvpRequest): Save
         current: responseRecord(row),
         rsvpOpen: rsvpOpen(db),
         now: now(),
+        baseRevision: row.revision_floor,
       },
       req,
     );
@@ -209,7 +211,7 @@ function toAdmin(row: InvRow, people: PersonRow[]): AdminInvitation {
     attendance: (resp?.status ?? 'pending') as AttendanceStatus,
     selectedPersonIds: selected,
     attendingCount: resp?.status === 'attending' ? selected.filter((id) => activeKeys.has(lower(id))).length : 0,
-    revision: resp?.revision ?? 0,
+    revision: resp?.revision ?? row.revision_floor,
     respondedAt: row.r_updated_at,
     responseSource: row.r_source,
     comm: { status: row.c_status ?? 'none', source: row.c_source, at: row.c_at },
@@ -451,10 +453,22 @@ export function adminSetResponse(db: DB, id: number, body: unknown): AdminInvita
     const row = getRow(db, id);
     const b = (body ?? {}) as Record<string, unknown>;
     const current = responseRecord(row);
-    const parsed = parseRsvpRequest({ status: b.status, personIds: b.personIds, expectedRevision: current?.revision ?? 0, requestId: newRequestId('admin') });
+    const parsed = parseRsvpRequest({
+      status: b.status,
+      personIds: b.personIds,
+      expectedRevision: current?.revision ?? row.revision_floor,
+      requestId: newRequestId('admin'),
+    });
     if (!parsed.ok) throw new HttpError(parsed.status, parsed.code, parsed.message);
     const decision = decideRsvp(
-      { invitation: { id: row.code, seats: row.seats, active: true }, people: personRecords(row, peopleOf(db, id)), current, rsvpOpen: true, now: now() },
+      {
+        invitation: { id: row.code, seats: row.seats, active: true },
+        people: personRecords(row, peopleOf(db, id)),
+        current,
+        rsvpOpen: true,
+        now: now(),
+        baseRevision: row.revision_floor,
+      },
       parsed.value,
     );
     if (!decision.ok) throw new HttpError(decision.status, decision.code, decision.message);
@@ -465,9 +479,11 @@ export function adminSetResponse(db: DB, id: number, body: unknown): AdminInvita
 
 export function adminClearResponse(db: DB, id: number): AdminInvitation {
   return tx(db, () => {
-    getRow(db, id);
+    const row = getRow(db, id);
     const r = db.prepare('DELETE FROM responses WHERE invitation_id = ?').run(id);
     if (r.changes) {
+      // Borrar también es un cambio: la revisión sigue subiendo (ver migración 4).
+      db.prepare('UPDATE invitations SET revision_floor = ? WHERE id = ?').run((row.r_revision ?? row.revision_floor) + 1, id);
       db.prepare('INSERT INTO response_history (invitation_id, status, adults, source, recorded_at) VALUES (?, NULL, NULL, ?, ?)').run(id, 'admin', now());
     }
     return getInvitation(db, id);

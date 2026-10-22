@@ -1,5 +1,5 @@
 ﻿id_invitacion,lado,grupo,contacto_principal,telefono,cupo,activa,token,enlace,notas
-INV-001,novia,Familia Ejemplo Robles,Ana Robles Ejemplo,3300000001,4,sí,,,Ejemplo ficticio: borra esta fila
-INV-002,novio,Familia Ficticia Prado,Julián Prado Ficticio,,2,sí,,,Ejemplo ficticio
-INV-003,ambos,Marina Luna Prueba,Marina Luna Prueba,,1,sí,,,Ejemplo ficticio
-INV-004,novia,Familia Muestra Sol,Inés Sol Muestra,,3,sí,,,"Ejemplo ficticio: 4 personas, cupo 3"
+EJEMPLO-001,novia,Familia Ejemplo Robles,Ana Robles Ejemplo,3300000001,4,sí,,,Ejemplo ficticio: borra esta fila
+EJEMPLO-002,novio,Familia Ficticia Prado,Julián Prado Ficticio,,2,sí,,,Ejemplo ficticio
+EJEMPLO-003,ambos,Marina Luna Prueba,Marina Luna Prueba,,1,sí,,,Ejemplo ficticio
+EJEMPLO-004,novia,Familia Muestra Sol,Inés Sol Muestra,,3,sí,,,"Ejemplo ficticio: 4 personas, cupo 3"

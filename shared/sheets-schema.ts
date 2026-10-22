@@ -22,14 +22,14 @@ export interface ColumnDef {
 export const INVITATIONS_TAB = {
   name: 'Invitaciones',
   columns: [
-    { key: 'id', header: 'id_invitacion', required: true, help: 'ID estable de la invitación (p. ej. INV-001). No se reutiliza ni se cambia.' },
+    { key: 'id', header: 'id_invitacion', required: true, help: 'ID estable de la invitación (p. ej. INV-001). No se reutiliza ni se cambia. Los IDs EJEMPLO- y DEMO- nunca se atienden.' },
     { key: 'side', header: 'lado', help: 'novia, novio o ambos.' },
     { key: 'group', header: 'grupo', required: true, help: 'Nombre de la invitación tal como lo verá la familia.' },
     { key: 'contact', header: 'contacto_principal', help: 'Persona a quien se le envía el enlace (uso interno).' },
     { key: 'phone', header: 'telefono', help: '10 dígitos o formato internacional (uso interno, nunca se muestra).' },
     { key: 'seats', header: 'cupo', help: 'Lugares asignados (1 a 30). Vacío = pendiente; no puede confirmar.' },
-    { key: 'active', header: 'activa', help: 'Casilla: desmarcada desactiva la invitación y su enlace.' },
-    { key: 'token', header: 'token', technical: true, help: 'Lo genera el menú Boda. Quien tenga el enlace puede responder por esta invitación.' },
+    { key: 'active', header: 'activa', help: 'sí o no (vacío = sí). "no" desactiva la invitación y su enlace.' },
+    { key: 'token', header: 'token', technical: true, help: 'Lo genera el menú Boda ("revocado" = enlace anulado a propósito). Quien tenga el enlace puede responder por esta invitación.' },
     { key: 'link', header: 'enlace', technical: true, help: 'Fórmula: url_publica + /i/ + token. Para copiar y enviar.' },
     { key: 'notes', header: 'notas', help: 'Notas internas (nunca se muestran al invitado).' },
   ] as ColumnDef[],
@@ -41,7 +41,7 @@ export const PEOPLE_TAB = {
     { key: 'id', header: 'id_persona', required: true, help: 'ID estable de la persona (p. ej. INV-001-P1).' },
     { key: 'invitationId', header: 'id_invitacion', required: true, help: 'ID de la invitación a la que pertenece.' },
     { key: 'name', header: 'nombre', required: true, help: 'Nombre autorizado, como aparecerá en la confirmación.' },
-    { key: 'active', header: 'activa', help: 'Casilla: desmarcada la quita de la confirmación sin borrar su ID.' },
+    { key: 'active', header: 'activa', help: 'sí o no (vacío = sí). "no" la quita de la confirmación sin borrar su ID.' },
   ] as ColumnDef[],
 };
 
