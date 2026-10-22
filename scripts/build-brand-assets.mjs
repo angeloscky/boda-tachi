@@ -5,9 +5,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pub = path.join(root, 'public');
 const mono = fs.readFileSync(path.join(root, 'assets/logo/vector/monograma-claro.svg'), 'utf8');
 const logo = fs.readFileSync(path.join(root, 'assets/logo/vector/logo-claro.svg'), 'utf8');

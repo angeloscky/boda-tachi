@@ -35,6 +35,7 @@ html {
 
 body {
   margin: 0;
+  font-variant-numeric: lining-nums;
   background: var(--black);
   color: var(--ivory);
   font-family: var(--sans);
