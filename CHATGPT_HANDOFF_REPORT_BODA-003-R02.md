@@ -18,7 +18,7 @@
 
 | Inicio | Fin | Duración |
 | --- | --- | --- |
-| 2026-10-21 22:37 CST | {{FIN}} | {{DURACION}} |
+| 2026-10-21 22:37 CST | 2026-10-22 00:25 CST | 1 h 48 min |
 
 ## Ubicación y versión
 
@@ -26,7 +26,8 @@
 - Commits de esta ronda:
   - `fc79cb7`: implementación.
   - `83aca21`: correcciones de las dos revisiones.
-  - {{COMMIT_FINAL}}: este informe, el README y {{CORRECCIONES_FINALES}}.
+  - `8da9be4`: **commit de código final**, con lo que quedó tras la verificación de los revisores.
+  - Encima va el commit que agrega este informe (sin cambios de código).
 - Se partió del estado de BODA-002-R01 y se conservaron sus cambios posteriores (nombre de la novia, salón).
 - Copias: `C:\Users\Pc\boda tachi\` (este informe y un `.zip` del proyecto).
 
@@ -140,10 +141,11 @@ navegador → servidor de la invitación (/api) → GuestStore
 
 Comandos ejecutados en esta sesión sobre el commit final:
 
-- `npm test`: **72/72** (Vitest + Supertest; Apps Script se ejecuta con dobles de `SpreadsheetApp`, `LockService` y la redirección de Google).
+- `npm test`: **75/75** (Vitest + Supertest; Apps Script se ejecuta con dobles de `SpreadsheetApp`, `LockService`, `PropertiesService` y la redirección de Google).
 - `npm run typecheck`: sin errores.
-- `npm run build`: correcto.
-- `npx playwright test`: **34/34** (17 recorridos en iPhone 13 y 17 en escritorio de 1440×900, sobre el servidor compilado), tres corridas completas seguidas en verde.
+- `npm run build` y `npm run build:static`: correctos.
+- `npx playwright test`: **36/36** (18 recorridos en iPhone 13 y 18 en escritorio de 1440×900, sobre el servidor compilado), dos corridas completas seguidas en verde con el código final.
+- Durante la ronda falló una vez una prueba de teclado: el foco tras abrir el sobre llegaba un cuadro tarde. Se corrigió en el código (el foco se mueve en el mismo render) y no en la prueba.
 
 | # | Prueba pedida | Resultado | Dónde |
 | --- | --- | --- | --- |
@@ -184,7 +186,16 @@ Comandos ejecutados en esta sesión sobre el commit final:
 - El tope global de intentos del panel dejaba entrar con la contraseña correcta.
 - La producción podía arrancar en demo o sin URL pública.
 
-{{VERIFICACION_SEGURIDAD}}
+*Verificación del revisor sobre `83aca21`:*
+- 11 de 14 hallazgos quedaron corregidos.
+- Lo que quedaba se corrigió en `8da9be4`, con pruebas:
+  - En Sheets, borrar a mano una fila de Respuestas reiniciaba la revisión. Ahora el script guarda la última revisión escrita por invitación.
+  - Un teléfono, lado o notas mal capturados bloqueaban a la familia. Ahora solo se reportan.
+  - Una invitación desactivada con otro problema respondía "revisar" en vez de "no encontrada".
+- **Riesgos aceptados y documentados:**
+  - **Tope global del panel.** Alguien puede mantenerlo bloqueado a propósito con 30 intentos por hora. Se prefirió eso a permitir adivinar la contraseña desde muchas IP. El contador se limpia al reiniciar, y en modo Sheets la lista se administra en la hoja con la cuenta de Google.
+  - **Nonce no atómico.** Ver "Limitaciones".
+  - **`http://` en producción.** Ahora arroja un aviso al arrancar.
 
 **UX/QA.** Hallazgos corregidos:
 - Foco perdido tras cambiar de vista.
@@ -198,7 +209,15 @@ Comandos ejecutados en esta sesión sobre el commit final:
 - El mensaje de WhatsApp contaba lugares en vez de personas.
 - El `.ics` ahora se sirve desde el servidor.
 
-{{VERIFICACION_UX}}
+*Verificación del revisor sobre `83aca21`:*
+- La mayoría de los hallazgos quedaron corregidos.
+- Lo que quedaba se corrigió en `8da9be4`, con pruebas:
+  - Foco en el aviso cuando se cierran las confirmaciones durante la revisión, y foco en la sección al usar "Reintentar".
+  - El aviso de lugares sin usar se calcula con el mínimo entre cupo y personas.
+  - La revisión se desplaza arriba para dejar el botón a la vista. No se volvió a medir a 320 px de ancho.
+  - "Exportar" y "Plantillas" ya no se abren a la vez, tienen título en el teléfono y se cierran con Escape o tocando fuera.
+  - La lista del panel avisa "cupo mayor que personas".
+  - "Registrar respuesta recibida por otro medio" ya mide 44 px.
 
 ## Cómo llega la invitación al teléfono de cada invitado
 
@@ -228,6 +247,7 @@ Comandos ejecutados en esta sesión sobre el commit final:
 - **Nonces:** el registro de nonces usa la caché del script fuera del bloqueo. Dos copias idénticas de una misma solicitud firmada, enviadas a la vez, podrían pasar ambas. Para eso habría que capturar una solicitud firmada que viaja por HTTPS, y aun así `requestId` evita duplicar la respuesta.
 - **WhatsApp:** en modo Sheets, el panel muestra estado, totales y problemas, pero no prepara mensajes; esa preparación existe solo en la demostración local.
 - Los textos "escríbenos" (confirmación cerrada, detalle por revisar) no tienen todavía un canal de contacto: falta el dato.
+- El tope global de intentos del panel puede usarse para bloquearlo a propósito (riesgo aceptado; ver "Revisión independiente").
 - Un enlace personal inexistente también muestra el sobre antes del aviso "No encontramos esta invitación".
 - El logo sigue siendo un trazado automático de una captura, no el vector original de la diseñadora.
 
