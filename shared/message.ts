@@ -1,13 +1,13 @@
 import { EVENT } from './event.js';
 
-/** Plantilla del mensaje de invitación. Marcadores: {nombre}, {enlace}, {lugares}. */
+/** Plantilla del mensaje de invitación. Marcadores: {nombre}, {fecha}, {invitarte}, {tu}, {enlace}, {lugares}. */
 export const INVITE_TEMPLATE = [
   'Hola, {nombre}:',
   '',
-  'Con mucha ilusión queremos invitarte a nuestra boda el {fecha} en Zapopan, Jalisco.',
+  'Con mucha ilusión queremos {invitarte} a nuestra boda el {fecha} en Zapopan, Jalisco.',
   '{lugares}',
   '',
-  'Aquí está tu invitación y la confirmación de asistencia:',
+  'Aquí está {tu} invitación y la confirmación de asistencia:',
   '{enlace}',
   '',
   'Con cariño,',
@@ -23,6 +23,8 @@ export function buildInviteMessage(input: { name: string; seats: number | null; 
   return template
     .replaceAll('{nombre}', input.name)
     .replaceAll('{fecha}', EVENT.dateLabel)
+    .replaceAll('{invitarte}', input.seats === 1 ? 'invitarte' : 'invitarlos')
+    .replaceAll('{tu}', input.seats === 1 ? 'tu' : 'su')
     .replaceAll('{enlace}', input.link)
     .replaceAll('{lugares}', seatsLine(input.seats))
     .replace(/\n{3,}/g, '\n\n');

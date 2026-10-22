@@ -11,6 +11,7 @@ export class ApiFailure extends Error {
 }
 
 const GENERIC = 'No pudimos comunicarnos con el servidor. Revisa tu conexión e inténtalo de nuevo.';
+const SERVER_DOWN = 'El servidor no respondió correctamente. Inténtalo de nuevo en un momento.';
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let res: Response;
@@ -31,7 +32,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   }
   if (!res.ok) {
     const d = (data ?? {}) as { error?: string; message?: string };
-    throw new ApiFailure(d.error ?? 'server', d.message ?? GENERIC, res.status);
+    throw new ApiFailure(d.error ?? 'server', d.message ?? SERVER_DOWN, res.status);
   }
   return data as T;
 }

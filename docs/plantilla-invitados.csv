@@ -1,0 +1,4 @@
+﻿identificador,nombre,telefono,lugares_adultos,notas
+FAM-001,Familia Ejemplo Uno,3312345678,4,Ejemplo: borra esta fila
+FAM-002,Ana Ejemplo,,1,
+FAM-003,Familia Ejemplo Tres,,,Sin lugares: quedará pendiente

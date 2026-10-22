@@ -48,12 +48,19 @@ test('(1)(3) recorrido completo: abrir, consultar, confirmar y volver a abrir', 
   expect(popup.url()).toContain('maps.app.goo.gl/v6wqtCa2jvmqhKu56');
   await popup.close();
 
-  await page.evaluate(() => document.querySelectorAll('.reveal').forEach((e) => e.classList.add('in')));
+  // Captura de página completa: sin foco residual y sin la barra fija (que quedaría a media página).
+  await page.evaluate(() => {
+    document.querySelectorAll('.reveal').forEach((e) => e.classList.add('in'));
+    (document.activeElement as HTMLElement | null)?.blur();
+    document.querySelector<HTMLElement>('.bottom-nav')!.style.visibility = 'hidden';
+  });
+  await page.waitForTimeout(900);
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-03-invitacion-completa.png`, fullPage: true });
+  await page.evaluate(() => (document.querySelector<HTMLElement>('.bottom-nav')!.style.visibility = ''));
 
   // Confirmación
   await page.getByRole('link', { name: 'Confirmar', exact: true }).click();
-  await page.getByLabel('Sí, asistiré').check();
+  await page.getByLabel('Sí, asistiremos').check();
   await page.getByLabel('2 adultos').check();
   await page.getByRole('button', { name: 'Enviar confirmación' }).click();
   const saved = page.getByTestId('rsvp-saved');
@@ -82,12 +89,12 @@ test('(9) si el servidor falla no se muestra éxito, se conservan los datos y se
   const inv = await seedInvitation(request, 'Familia Prueba Fallo', 2);
   await page.goto(`/i/${inv.token}#confirmar`);
   await page.route('**/api/invitations/*/rsvp', (r) => r.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"server_error","message":"Ocurrió un error en el servidor. Inténtalo de nuevo."}' }));
-  await page.getByLabel('Sí, asistiré').check();
+  await page.getByLabel('Sí, asistiremos').check();
   await page.getByLabel('2 adultos').check();
   await page.getByRole('button', { name: 'Enviar confirmación' }).click();
   await expect(page.getByRole('alert')).toContainText('Tu respuesta no se ha guardado');
   await expect(page.getByTestId('rsvp-saved')).toHaveCount(0);
-  await expect(page.getByLabel('Sí, asistiré')).toBeChecked();
+  await expect(page.getByLabel('Sí, asistiremos')).toBeChecked();
   await expect(page.getByLabel('2 adultos')).toBeChecked();
 
   // Sin conexión: mismo comportamiento
@@ -115,10 +122,10 @@ test('(5) un doble toque en enviar deja una sola respuesta', async ({ page, requ
     await new Promise((res) => setTimeout(res, 400));
     await r.continue();
   });
-  await page.getByLabel('No podré asistir').check();
+  await page.getByLabel('No podremos asistir').check();
   const btn = page.getByRole('button', { name: 'Enviar confirmación' });
   await btn.dblclick();
-  await expect(page.getByTestId('rsvp-saved')).toContainText('No podrán asistir');
+  await expect(page.getByTestId('rsvp-saved')).toContainText('no podrán asistir');
   expect(puts).toBe(1);
 });
 
@@ -129,6 +136,11 @@ test('(2) navegación por teclado y movimiento reducido', async ({ browser, requ
   await page.goto(`/i/${inv.token}`);
   const seal = page.getByRole('button', { name: 'Abrir invitación' });
   await expect(seal).toBeFocused();
+  // Con el sobre abierto, Tab no sale hacia el contenido oculto
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  expect(await page.evaluate(() => !!document.activeElement?.closest('main'))).toBe(false);
+  await seal.focus();
   await page.keyboard.press('Enter');
   // Con movimiento reducido el sobre se abre al instante.
   await expect(page.getByRole('dialog', { name: 'Apertura de la invitación' })).toBeHidden({ timeout: 800 });
@@ -140,7 +152,7 @@ test('(2) navegación por teclado y movimiento reducido', async ({ browser, requ
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/#confirmar$/);
   // Llegar a la confirmación y responder solo con teclado
-  const yes = page.getByLabel('Sí, asistiré');
+  const yes = page.getByLabel('Sí, asistiremos');
   await yes.focus();
   await page.keyboard.press('Space');
   await expect(yes).toBeChecked();
@@ -168,6 +180,10 @@ test('página general, enlace inexistente e invitación sin lugares', async ({ p
 
   await page.goto('/i/ZZZZZZZZZZZZZZZZZZZZZZZZ#confirmar');
   await expect(page.getByRole('alert')).toContainText('No encontramos esta invitación');
+  // Un enlace truncado también avisa, en la portada y en la confirmación
+  await page.goto('/i/abc#confirmar');
+  await expect(page.getByRole('alert')).toContainText('No encontramos esta invitación');
+  await expect(page.getByRole('note').filter({ hasText: 'No encontramos esta invitación personal' })).toBeAttached();
 
   const inv = await seedInvitation(request, 'Familia Pendiente de Lugares', null);
   await page.goto(`/i/${inv.token}#confirmar`);
@@ -201,7 +217,7 @@ test('(8) administración: inaccesible sin sesión y muestra la confirmación co
   await expect(row).toContainText('Asistirá · 4');
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-05-admin-lista.png`, fullPage: true });
   await row.getByRole('button', { name: 'Mensaje para Familia Panel Admin' }).click();
-  await expect(page.getByText('Nada se envía desde aquí')).toBeVisible();
+  await expect(page.getByText('Este panel no envía mensajes')).toBeVisible();
   await expect(page.locator('.adm-wa-bubble')).toContainText(inv.link);
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-06-admin-mensaje.png` });
 });

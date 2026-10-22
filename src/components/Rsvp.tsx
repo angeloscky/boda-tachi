@@ -16,7 +16,9 @@ interface Props {
 }
 
 const fmtDate = (iso: string) =>
-  new Intl.DateTimeFormat('es-MX', { dateStyle: 'long', timeStyle: 'short', timeZone: EVENT.timeZone }).format(new Date(iso));
+  new Intl.DateTimeFormat('es-MX', { dateStyle: 'long', timeStyle: 'short', timeZone: EVENT.timeZone })
+    .format(new Date(iso))
+    .replace(/\s*([ap])\.\s*m\./g, ' $1. m.');
 
 const deadlineText = () =>
   EVENT.rsvpDeadline
@@ -75,6 +77,7 @@ function RsvpForm({
   staticDemo?: boolean;
 }) {
   const seats = invitation.seats ?? 0;
+  const plural = seats !== 1;
   const [editing, setEditing] = useState(!invitation.response);
   const [status, setStatus] = useState<'attending' | 'declined' | null>(invitation.response?.status ?? null);
   const [adults, setAdults] = useState<number>(
@@ -83,8 +86,23 @@ function RsvpForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
   const inFlight = useRef(false);
   const resultRef = useRef<HTMLDivElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+
+  /** Vuelve a la respuesta guardada (al entrar o cancelar la edición). */
+  const resetToSaved = () => {
+    const r = invitation.response;
+    setStatus(r?.status ?? null);
+    setAdults(r?.status === 'attending' ? r.adults : seats === 1 ? 1 : 0);
+    setError(null);
+    setHint(null);
+  };
+
+  useEffect(() => {
+    if (error) errorRef.current?.focus();
+  }, [error]);
 
   useEffect(() => {
     if (justSaved) resultRef.current?.focus();
@@ -98,7 +116,7 @@ function RsvpForm({
           ? invitation.seats === 1
             ? 'Hemos reservado 1 lugar para ti.'
             : `Hemos reservado ${invitation.seats} lugares para ustedes.`
-          : 'Tu invitación está en preparación.'}
+          : null}
       </p>
     </>
   );
@@ -127,7 +145,9 @@ function RsvpForm({
         <p className="summary">
           {r.status === 'attending'
             ? `Asistirá${r.adults === 1 ? '' : 'n'} ${r.adults} ${r.adults === 1 ? 'adulto' : 'adultos'}`
-            : 'No podrán asistir'}
+            : plural
+              ? 'Nos avisaron que no podrán asistir'
+              : 'Nos avisaste que no podrás asistir'}
         </p>
         <p>Última actualización: {fmtDate(r.updatedAt)}</p>
         {invitation.canRespond ? (
@@ -137,6 +157,7 @@ function RsvpForm({
               className="btn"
               onClick={() => {
                 setJustSaved(false);
+                resetToSaved();
                 setEditing(true);
               }}
             >
@@ -154,7 +175,16 @@ function RsvpForm({
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (inFlight.current || !valid || !status) return;
+    if (inFlight.current) return;
+    if (!status) {
+      setHint('Elige si asistirás.');
+      return;
+    }
+    if (!valid) {
+      setHint('Elige cuántos adultos asistirán.');
+      return;
+    }
+    setHint(null);
     if (staticDemo) {
       setError('Esta es una vista de diseño sin servidor: la respuesta no se guardó. En la versión con servidor se registra al instante.');
       return;
@@ -183,9 +213,9 @@ function RsvpForm({
       {header}
       {deadline ? <p className="muted">{deadline}</p> : null}
       {error ? (
-        <div className="alert alert-error" role="alert" id="rsvp-error">
+        <div className="alert alert-error" role="alert" id="rsvp-error" ref={errorRef} tabIndex={-1}>
           <strong>Tu respuesta no se ha guardado</strong>
-          {error} Tus datos siguen aquí; puedes intentarlo de nuevo.
+          {error} Tu selección sigue aquí.
         </div>
       ) : null}
       <fieldset>
@@ -199,14 +229,24 @@ function RsvpForm({
               checked={status === 'attending'}
               onChange={() => {
                 setStatus('attending');
+                setHint(null);
                 if (adults < 1) setAdults(seats === 1 ? 1 : 0);
               }}
             />
-            Sí, asistiré
+            {plural ? 'Sí, asistiremos' : 'Sí, asistiré'}
           </label>
           <label className="choice">
-            <input type="radio" name="status" value="declined" checked={status === 'declined'} onChange={() => setStatus('declined')} />
-            No podré asistir
+            <input
+              type="radio"
+              name="status"
+              value="declined"
+              checked={status === 'declined'}
+              onChange={() => {
+                setStatus('declined');
+                setHint(null);
+              }}
+            />
+            {plural ? 'No podremos asistir' : 'No podré asistir'}
           </label>
         </div>
       </fieldset>
@@ -217,7 +257,11 @@ function RsvpForm({
           <div className="count-grid">
             {Array.from({ length: seats }, (_, i) => i + 1).map((n) => (
               <label className="choice" key={n}>
-                <input type="radio" name="adults" value={n} checked={adults === n} onChange={() => setAdults(n)} aria-label={`${n} ${n === 1 ? 'adulto' : 'adultos'}`} />
+                <input type="radio" name="adults" value={n} checked={adults === n} onChange={() => {
+                    setAdults(n);
+                    setHint(null);
+                  }}
+                  aria-label={`${n} ${n === 1 ? 'adulto' : 'adultos'}`} />
                 {n}
               </label>
             ))}
@@ -228,12 +272,25 @@ function RsvpForm({
         </fieldset>
       ) : null}
 
-      <button type="submit" className="btn btn-primary btn-block" disabled={saving || !valid} aria-disabled={saving || !valid}>
+      {hint ? (
+        <p className="form-hint" role="status">
+          {hint}
+        </p>
+      ) : null}
+      {/* Sin "disabled": así el foco no se pierde mientras se guarda; el envío doble lo evita inFlight. */}
+      <button type="submit" className="btn btn-primary btn-block" aria-disabled={saving || !valid}>
         {saving ? 'Guardando…' : invitation.response ? 'Actualizar mi respuesta' : 'Enviar confirmación'}
       </button>
       {invitation.response && !saving ? (
         <div style={{ textAlign: 'center', marginTop: 8 }}>
-          <button type="button" className="btn-link" onClick={() => setEditing(false)}>
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => {
+              resetToSaved();
+              setEditing(false);
+            }}
+          >
             Cancelar cambio
           </button>
         </div>

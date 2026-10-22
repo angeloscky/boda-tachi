@@ -15,5 +15,5 @@ export const LOGO = {
   monogram: `${base}assets/logo/monograma-claro.svg`,
   /** Monograma oscuro para la carta dentro del sobre. */
   monogramDark: `${base}assets/logo/monograma-negro.svg`,
-  alt: 'Sofía e Isaac · 22 | mayo | 2027',
+  alt: 'Sofía e Isaac · 22 de mayo de 2027',
 };

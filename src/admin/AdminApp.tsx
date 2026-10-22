@@ -15,7 +15,12 @@ const COMM: Record<CommStatus, string> = {
 };
 const errMsg = (e: unknown) => (e instanceof ApiFailure ? e.message : 'Ocurrió un error inesperado.');
 const fmt = (iso: string | null) =>
-  iso ? new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' }).format(new Date(iso)) : '';
+  iso
+    ? new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' })
+        .format(new Date(iso))
+        .replace(/\s*([ap])\.\s*m\./g, ' $1. m.')
+    : '';
+const adultsLabel = (n: number) => `${n} ${n === 1 ? 'adulto' : 'adultos'}`;
 const fmtPhone = (p: string | null) => (p ? (p.startsWith('52') && p.length === 12 ? `+52 ${p.slice(2, 4)} ${p.slice(4, 8)} ${p.slice(8)}` : `+${p}`) : '');
 
 export default function AdminApp() {
@@ -94,6 +99,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [confirmToggle, setConfirmToggle] = useState(false);
   const toastTimer = useRef<number | undefined>(undefined);
 
   const notify = useCallback((msg: string) => {
@@ -123,6 +129,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 
   async function toggleRsvp() {
     if (!summary) return;
+    setConfirmToggle(false);
     try {
       setSummary(await adminApi.setRsvpOpen(!summary.rsvpOpen));
       notify(summary.rsvpOpen ? 'Confirmaciones cerradas' : 'Confirmaciones abiertas');
@@ -170,9 +177,23 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             <div className="adm-stat adm-stat-toggle">
               <span className="adm-stat-label">Confirmaciones</span>
               <strong className={summary.rsvpOpen ? 'ok' : 'off'}>{summary.rsvpOpen ? 'Abiertas' : 'Cerradas'}</strong>
-              <button className="adm-btn adm-btn-small" onClick={toggleRsvp}>
-                {summary.rsvpOpen ? 'Cerrar' : 'Abrir'}
-              </button>
+              {confirmToggle ? (
+                <div className="adm-inline">
+                  <span className="adm-sub" style={{ marginTop: 0 }}>
+                    {summary.rsvpOpen ? 'Nadie podrá confirmar ni cambiar su respuesta.' : 'Los invitados podrán confirmar de nuevo.'}
+                  </span>
+                  <button className="adm-btn adm-btn-small adm-btn-primary" onClick={toggleRsvp}>
+                    Sí, {summary.rsvpOpen ? 'cerrar' : 'abrir'}
+                  </button>
+                  <button className="adm-btn adm-btn-small adm-btn-ghost" onClick={() => setConfirmToggle(false)}>
+                    Cancelar
+                  </button>
+                </div>
+              ) : (
+                <button className="adm-btn adm-btn-small" onClick={() => setConfirmToggle(true)}>
+                  {summary.rsvpOpen ? 'Cerrar confirmaciones' : 'Abrir confirmaciones'}
+                </button>
+              )}
             </div>
           </section>
         ) : null}
@@ -272,6 +293,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                         <span className={`adm-pill adm-pill-${r.attendance}`}>
                           {ATTENDANCE[r.attendance]}
                           {r.attendance === 'attending' ? ` · ${r.adults}` : ''}
+                          {r.attendance === 'attending' ? <span className="sr-only"> {r.adults === 1 ? 'adulto' : 'adultos'}</span> : null}
                         </span>
                         {r.respondedAt ? <span className="adm-sub">{fmt(r.respondedAt)}</span> : null}
                       </td>
@@ -397,10 +419,11 @@ function EditDialog({ row, onClose, onSaved }: { row: AdminRow | null; onClose: 
   function submit(e: FormEvent) {
     e.preventDefault();
     const body = { ...form, seats: form.seats.trim() === '' ? null : Number(form.seats), phone: form.phone.trim() || null, notes: form.notes.trim() || null };
+    // Al crear, el diálogo sigue abierto para mostrar y copiar el enlace nuevo.
     void run(
       () => (current ? adminApi.update(current.id, body) : adminApi.create(body)),
-      current ? 'Cambios guardados' : 'Invitación creada',
-      true,
+      current ? 'Cambios guardados' : 'Invitación creada; ya puedes copiar su enlace',
+      Boolean(current),
     );
   }
 
@@ -476,7 +499,7 @@ function EditDialog({ row, onClose, onSaved }: { row: AdminRow | null; onClose: 
             <p>
               <span className={`adm-pill adm-pill-${current.attendance}`}>
                 {ATTENDANCE[current.attendance]}
-                {current.attendance === 'attending' ? ` · ${current.adults} adultos` : ''}
+                {current.attendance === 'attending' ? ` · ${adultsLabel(current.adults)}` : ''}
               </span>{' '}
               {current.respondedAt ? <span className="adm-muted">{fmt(current.respondedAt)}</span> : null}
             </p>
@@ -565,7 +588,7 @@ function MessageDialog({ row, onClose, onChanged, notify }: { row: AdminRow; onC
     <Modal title={`Mensaje · ${row.name}`} onClose={onClose} wide>
       {provider && !provider.sendsRealMessages ? (
         <p className="adm-alert adm-alert-info">
-          Canal: {provider.label}. Nada se envía desde aquí. Copiar el texto o abrir WhatsApp no cuenta como enviado ni como confirmación.
+          Este panel no envía mensajes. Copia el texto o ábrelo en WhatsApp y envíalo tú; después usa “Registrar envío manual”. Copiar o abrir WhatsApp no cuenta como enviado ni como confirmación.
         </p>
       ) : null}
       {error ? (
@@ -604,7 +627,7 @@ function MessageDialog({ row, onClose, onChanged, notify }: { row: AdminRow; onC
           </div>
           <div className="adm-subsection">
             <h3>Registro de comunicación</h3>
-            <p className="adm-muted">El proveedor de simulación solo marca “preparado”. Usa el registro manual únicamente cuando tú hayas enviado o visto entregado el mensaje.</p>
+            <p className="adm-muted">“Marcar como preparado” solo indica que el texto está listo. Registra el envío o la entrega únicamente cuando tú hayas enviado el mensaje o lo veas entregado.</p>
             <div className="adm-inline">
               <button className="adm-btn adm-btn-small" disabled={busy} onClick={() => act(() => adminApi.prepare(row.id), 'Mensaje marcado como preparado (sin envío)')}>
                 Marcar como preparado
@@ -696,8 +719,7 @@ function ImportDialog({ onClose, onApplied }: { onClose: () => void; onApplied: 
                 <thead>
                   <tr>
                     <th>Línea</th>
-                    <th>Identificador</th>
-                    <th>Nombre</th>
+                    <th>Invitación</th>
                     <th>Resultado</th>
                     <th>Detalle</th>
                   </tr>
@@ -706,8 +728,10 @@ function ImportDialog({ onClose, onApplied }: { onClose: () => void; onApplied: 
                   {issues.map((r) => (
                     <tr key={r.line} className={r.action === 'error' ? 'is-error' : ''}>
                       <td>{r.line}</td>
-                      <td>{r.code}</td>
-                      <td>{r.name}</td>
+                      <td>
+                        {r.code}
+                        <span className="adm-sub">{r.name}</span>
+                      </td>
                       <td>{ACTION_LABEL[r.action]}</td>
                       <td>
                         {[...r.errors, ...r.warnings].map((m, i) => (

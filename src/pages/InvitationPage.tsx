@@ -157,7 +157,8 @@ export default function InvitationPage({ token, staticDemo }: Props) {
       ) : null}
       {!envelopeDone ? <Envelope guestName={invitation?.name} onOpen={onEnvelopeOpen} /> : null}
 
-      <main ref={mainRef} tabIndex={-1} aria-hidden={!envelopeDone || undefined} style={{ outline: 'none' }}>
+      {/* inert: mientras el sobre está abierto, el contenido de atrás no recibe foco ni lectura. */}
+      <main ref={mainRef} tabIndex={-1} inert={!envelopeDone} style={{ outline: 'none' }}>
         <a className="skip-link" href="#confirmar">
           Ir a confirmar asistencia
         </a>
@@ -170,6 +171,11 @@ export default function InvitationPage({ token, staticDemo }: Props) {
             <p className="guest">
               Invitación para
               <strong>{invitation.name}</strong>
+            </p>
+          ) : null}
+          {loadError?.status === 404 ? (
+            <p className="not-found-note" role="note">
+              No encontramos esta invitación personal. Revisa que el enlace esté completo o pídenos que te lo compartamos de nuevo.
             </p>
           ) : null}
           <a className="scroll-cue" href="#invitacion">
@@ -264,12 +270,15 @@ export default function InvitationPage({ token, staticDemo }: Props) {
         <section className="section reveal" id="vestimenta" aria-labelledby="t-vestimenta">
           <p className="eyebrow">Para tomar en cuenta</p>
           <h2 id="t-vestimenta" className="title">
-            Código de vestimenta
+            Detalles del día
           </h2>
           <div className="notes">
             <div className="note-card">
               <DressIcon className="icon" />
-              <h3>{EVENT.dressCode.title}</h3>
+              <p className="eyebrow" style={{ margin: '12px 0 0' }}>
+                Código de vestimenta
+              </p>
+              <h3 style={{ marginTop: 4 }}>{EVENT.dressCode.title}</h3>
               <p>{EVENT.dressCode.text}</p>
               <div className="swatches" aria-hidden>
                 <span />
@@ -279,7 +288,7 @@ export default function InvitationPage({ token, staticDemo }: Props) {
             </div>
             <div className="note-card">
               <GlassesIcon className="icon" />
-              <h3>Solo adultos</h3>
+              <h3>{EVENT.adultsOnly.title}</h3>
               <p>{EVENT.adultsOnly.text}</p>
             </div>
           </div>

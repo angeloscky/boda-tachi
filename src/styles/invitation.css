@@ -24,6 +24,8 @@
 
 html {
   scroll-behavior: smooth;
+  /* Que la barra inferior nunca tape lo enfocado o el destino de un ancla. */
+  scroll-padding-bottom: calc(var(--nav-h) + 36px + env(safe-area-inset-bottom));
   -webkit-text-size-adjust: 100%;
 }
 
@@ -421,7 +423,6 @@ a {
 .btn[disabled],
 .btn[aria-disabled='true'] {
   opacity: 0.55;
-  cursor: progress;
 }
 .btn-link {
   background: none;
@@ -622,6 +623,26 @@ a {
 }
 .count-grid .choice input::after {
   display: none;
+}
+.count-grid .choice:has(input:checked) {
+  background: var(--olive);
+  border-color: var(--olive-light);
+  color: #fff;
+  font-weight: 500;
+}
+.form-hint {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: #ece3b3;
+}
+.not-found-note {
+  margin-top: 28px;
+  max-width: 340px;
+  font-size: 15px;
+  color: #f5d5cc;
+  border: 1px solid rgba(231, 169, 154, 0.45);
+  border-radius: 14px;
+  padding: 12px 16px;
 }
 
 .alert {

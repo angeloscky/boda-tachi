@@ -120,7 +120,6 @@
   font-size: 34px;
   font-weight: 500;
   line-height: 1.1;
-  font-variant-numeric: tabular-nums;
 }
 .adm-stat-strong {
   background: linear-gradient(160deg, rgba(104, 114, 84, 0.45), rgba(23, 26, 22, 1));
@@ -362,6 +361,9 @@
   .adm-row-actions {
     justify-content: flex-start;
     padding-top: 4px;
+  }
+  .adm-btn-small {
+    min-height: 44px;
   }
 }
 

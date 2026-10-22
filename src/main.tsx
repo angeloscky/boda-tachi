@@ -26,8 +26,9 @@ function route() {
       </Suspense>
     );
   }
-  const m = path.match(/^\/i\/([A-Za-z0-9_-]{16,64})$/);
-  return <InvitationPage token={m ? m[1] : null} />;
+  // Cualquier /i/<algo> es un enlace personal; el servidor decide si existe.
+  const m = path.match(/^\/i\/([^/]+)$/);
+  return <InvitationPage token={m ? decodeURIComponent(m[1]) : null} />;
 }
 
 createRoot(document.getElementById('root')!).render(<StrictMode>{route()}</StrictMode>);
