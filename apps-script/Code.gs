@@ -52,7 +52,9 @@ var BtRules = (() => {
     checkRoster: () => checkRoster,
     decideRsvp: () => decideRsvp,
     headersOf: () => headersOf,
+    inReviewIssue: () => inReviewIssue,
     invitationBlockers: () => invitationBlockers,
+    invitationsInReview: () => invitationsInReview,
     joinIds: () => joinIds,
     naturalCompare: () => naturalCompare,
     normalizePhone: () => normalizePhone,
@@ -62,6 +64,7 @@ var BtRules = (() => {
     parseResponseRow: () => parseResponseRow,
     parseRsvpRequest: () => parseRsvpRequest,
     parseStatusLabel: () => parseStatusLabel,
+    repeatedIds: () => repeatedIds,
     rowByKey: () => rowByKey,
     rowIssues: () => rowIssues,
     signingString: () => signingString,
@@ -310,11 +313,23 @@ var BtRules = (() => {
   }
   var joinIds = (ids) => ids.join(", ");
   var splitIds = (v) => text(v).split(/[,;\s]+/).filter(Boolean);
+  function repeatedIds(ids) {
+    const seen = /* @__PURE__ */ new Set();
+    const out = [];
+    for (const id of ids) {
+      if (seen.has(key(id))) out.push(id);
+      else seen.add(key(id));
+    }
+    return out;
+  }
+  var repeatedMessage = (ids) => `La respuesta repite a ${ids.length === 1 ? "la persona" : "las personas"} ${ids.join(", ")}; corrige la selección en la hoja.`;
   function parseResponseRow(raw) {
     const errors = [];
     const invitationId = text(raw.invitationId);
     const status = parseStatusLabel(raw.status);
     const personIds = splitIds(raw.personIds);
+    const repeated = repeatedIds(personIds);
+    if (repeated.length) errors.push(repeatedMessage(repeated));
     const revision = Number(text(raw.revision));
     if (!invitationId) errors.push("Falta el ID de invitación de la respuesta.");
     if (!status) errors.push('El estado debe ser "asistirá" o "no asistirá".');
@@ -386,6 +401,8 @@ var BtRules = (() => {
         add("error", "Respuestas", r.invitationId, "La invitación de esta respuesta no existe.");
         continue;
       }
+      const repeated = repeatedIds(r.personIds);
+      if (repeated.length) add("error", "Respuestas", r.invitationId, repeatedMessage(repeated));
       for (const pid of r.personIds) {
         const p = personById.get(key(pid));
         if (!p || key(p.invitationId) !== key(inv.id)) add("error", "Respuestas", r.invitationId, `La persona ${pid} no pertenece a esta invitación.`);
@@ -414,6 +431,14 @@ var BtRules = (() => {
     const responses = rows.responses.filter((r) => key(r.value.invitationId) === id);
     if (responses.length > 1) out.push("Hay más de una respuesta para esta invitación.");
     else if (responses.length === 1 && responses[0].errors.length) out.push(`Respuesta: ${responses[0].errors.join(" ")}`);
+    else if (responses.length === 1) {
+      const r = responses[0].value;
+      const ownIds = new Set(own.map((p) => key(p.value.id)));
+      const foreign = r.personIds.filter((pid) => !ownIds.has(key(pid)));
+      if (foreign.length) out.push(`Respuesta: ${foreign.join(", ")} no ${foreign.length === 1 ? "pertenece" : "pertenecen"} a esta invitación.`);
+      const seats = target.value.seats;
+      if (r.status === "attending" && seats !== null && r.personIds.length > seats) out.push(`Respuesta: confirma ${r.personIds.length} personas con cupo de ${seats}.`);
+    }
     return out;
   }
   function rowIssues(rows) {
@@ -426,17 +451,41 @@ var BtRules = (() => {
     rows.responses.forEach((r) => push("Respuestas", r.value.invitationId, r.errors));
     return issues;
   }
-  function summarize(invitations, people, responses) {
+  function invitationsInReview(rows) {
+    var _a;
+    const out = [];
+    for (const r of rows.invitations) {
+      if (!r.value.id || !r.value.active || DEMO_ID_RE.test(r.value.id) || ((_a = r.blocking) != null ? _a : r.errors).length) continue;
+      const blockers = invitationBlockers(r, rows);
+      if (blockers.length) out.push({ id: r.value.id, blockers });
+    }
+    return out;
+  }
+  var inReviewIssue = (r) => ({
+    severity: "error",
+    tab: "Invitaciones",
+    id: r.id,
+    message: `En revisión: su enlace personal muestra "detalle pendiente de revisar" y no cuenta como respondida hasta corregir la hoja. ${r.blockers.join(" ")}`
+  });
+  function summarize(invitations, people, responses, inReview = []) {
     const active = invitations.filter((i) => i.active);
     const activeIds = new Set(active.map((i) => key(i.id)));
     const activePeople = new Map(people.filter((p) => p.active && activeIds.has(key(p.invitationId))).map((p) => [key(p.id), p]));
     const byInv = new Map(responses.map((r) => [key(r.invitationId), r]));
-    const s = { invitations: active.length, incomplete: 0, seatsAssigned: 0, people: activePeople.size, attendingPeople: 0, attending: 0, declined: 0, pending: 0, unusedSeats: 0 };
+    const review = new Set(inReview.map(key));
+    const invOfPerson = new Map(people.map((p) => [key(p.id), key(p.invitationId)]));
+    const coherent = (inv, r) => !repeatedIds(r.personIds).length && r.personIds.every((pid) => invOfPerson.get(key(pid)) === key(inv.id)) && (r.status !== "attending" || inv.seats === null || r.personIds.length <= inv.seats);
+    const s = { invitations: active.length, incomplete: 0, seatsAssigned: 0, people: activePeople.size, attendingPeople: 0, attending: 0, declined: 0, pending: 0, unusedSeats: 0, inReview: 0 };
     for (const inv of active) {
       if (inv.seats === null) s.incomplete++;
       else s.seatsAssigned += inv.seats;
+      if (review.has(key(inv.id))) {
+        s.pending++;
+        s.inReview++;
+        continue;
+      }
       const r = byInv.get(key(inv.id));
-      if (!r) {
+      if (!r || !coherent(inv, r)) {
         s.pending++;
         continue;
       }
@@ -538,14 +587,20 @@ var BtRules = (() => {
  *
  * Propiedades del script (Configuración del proyecto → Propiedades del script):
  *   BT_SHARED_SECRET   el mismo valor que SHEETS_SHARED_SECRET en el servidor (≥ 32 caracteres)
+ *   BT_SPREADSHEET_ID  la hoja que atiende la aplicación web; la registra el menú
+ *                      Boda → Preparar estructura (no hace falta escribirla a mano)
  *
- * El script va vinculado a la hoja (Extensiones → Apps Script) y solo pide acceso
- * a esa hoja (alcance spreadsheets.currentonly).
+ * El script va vinculado a la hoja (Extensiones → Apps Script). Como aplicación web
+ * no hay "hoja activa": las operaciones abren la hoja registrada con openById, que
+ * requiere el alcance https://www.googleapis.com/auth/spreadsheets (acceso a las
+ * hojas de la cuenta que implementa). El invitado nunca elige el archivo: el ID solo
+ * sale de las propiedades del script.
  * ========================================================================== */
 
 var BT_TZ = 'America/Mexico_City';
 var BT_LOCK_MS = 10000;
 var BT_MAX_PAYLOAD = 20000;
+var BT_SHEET_PROP = 'BT_SPREADSHEET_ID';
 
 // ---------------------------------------------------------------- web app
 
@@ -573,11 +628,21 @@ function doGet() {
 }
 
 function dispatch_(op, payload) {
-  if (op === 'ping') return { ok: true, result: { schemaVersion: BtRules.SHEETS_SCHEMA_VERSION, rulesVersion: BtRules.RULES_VERSION, tabs: checkStructure_(ss_()) } };
+  if (op === 'ping') return ping_();
   if (op === 'getInvitation') return getInvitation_(payload && payload.token);
   if (op === 'saveResponse') return saveResponse_(payload && payload.token, payload && payload.request);
   if (op === 'summary') return summary_();
   return { ok: false, status: 400, code: 'unknown_op', message: 'Operación no permitida.' };
+}
+
+function ping_() {
+  try {
+    return { ok: true, result: { schemaVersion: BtRules.SHEETS_SCHEMA_VERSION, rulesVersion: BtRules.RULES_VERSION, tabs: checkStructure_(webSs_()) } };
+  } catch (err) {
+    var failure = sheetFailure_(err);
+    if (failure) return failure;
+    throw err;
+  }
 }
 
 function secret_() {
@@ -626,8 +691,44 @@ function sameText_(a, b) {
 
 // ---------------------------------------------------------------- lectura de la hoja (por encabezado, nunca por posición)
 
-function ss_() {
-  return SpreadsheetApp.getActiveSpreadsheet();
+/**
+ * Hoja de las operaciones de la aplicación web. Ahí no existe getActiveSpreadsheet()
+ * (devuelve null), así que se abre la hoja registrada en las propiedades del script.
+ * La solicitud del invitado no puede elegir otra: el ID no viene en ningún payload.
+ */
+function webSs_() {
+  var id = String(PropertiesService.getScriptProperties().getProperty(BT_SHEET_PROP) || '').trim();
+  if (!id) throw sheetError_('sheet_not_configured', 'El script no tiene registrada la hoja. Ábrela y usa Boda → Preparar estructura.');
+  if (!/^[A-Za-z0-9_-]{20,100}$/.test(id)) {
+    throw sheetError_('sheet_not_configured', 'El ID guardado en ' + BT_SHEET_PROP + ' no es un ID de hoja válido (¿se pegó la URL completa?). Abre la hoja y usa Boda → Preparar estructura.');
+  }
+  var ss = null;
+  try {
+    ss = SpreadsheetApp.openById(id);
+  } catch (err) {
+    console.error(err);
+  }
+  if (!ss) throw sheetError_('sheet_unavailable', 'No se pudo abrir la hoja registrada (¿se borró, cambió de dueño o faltan permisos?).');
+  return ss;
+}
+
+function sheetError_(code, message) {
+  var err = new Error(message);
+  err.btSheet = code;
+  return err;
+}
+
+/** Hoja sin registrar o inaccesible: error claro y controlado, nunca "conectado" ni "guardado". */
+function sheetFailure_(err) {
+  return err && err.btSheet ? { ok: false, status: 503, code: err.btSheet, message: err.message, retryable: false } : null;
+}
+
+/** Menú (contexto vinculado): registra esta hoja como la que atiende la aplicación web. */
+function registerSheet_(ss) {
+  var props = PropertiesService.getScriptProperties();
+  var previous = props.getProperty(BT_SHEET_PROP);
+  props.setProperty(BT_SHEET_PROP, ss.getId());
+  return previous && previous !== ss.getId() ? previous : null;
 }
 
 function norm_(h) {
@@ -778,13 +879,13 @@ function guestPayload_(inv, people, response, open, baseRevision) {
 function getInvitation_(token) {
   if (typeof token !== 'string' || !BtRules.LIVE_TOKEN_RE.test(token)) return NOT_FOUND;
   try {
-    var ss = ss_();
+    var ss = webSs_();
     var ctx = loadContext_(ss, token);
     if (ctx.error) return ctx.error;
     return { ok: true, result: guestPayload_(ctx.inv, ctx.people, ctx.current, rsvpOpen_(ss), ctx.baseRevision) };
   } catch (err) {
     console.error(err);
-    return { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'read_failed', message: String((err && err.message) || err), retryable: true };
+    return sheetFailure_(err) || { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'read_failed', message: String((err && err.message) || err), retryable: true };
   }
 }
 
@@ -797,7 +898,7 @@ function saveResponse_(token, request) {
     return { ok: false, status: 503, code: 'busy', message: 'El registro está ocupado; inténtalo de nuevo.', retryable: true };
   }
   try {
-    var ss = ss_();
+    var ss = webSs_();
     var ctx = loadContext_(ss, token);
     if (ctx.error) return ctx.error;
     var inv = ctx.inv;
@@ -833,7 +934,7 @@ function saveResponse_(token, request) {
     return { ok: true, result: result };
   } catch (err) {
     console.error(err);
-    return { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'write_failed', message: String((err && err.message) || err), retryable: true };
+    return sheetFailure_(err) || { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'write_failed', message: String((err && err.message) || err), retryable: true };
   } finally {
     lock.releaseLock();
   }
@@ -867,17 +968,21 @@ function writeResponse_(table, rowNumber, r) {
 /**
  * Registros de la hoja para totales y revisión. Las filas con errores de formato no se
  * cuentan (se reportan como problemas): así una fila mal capturada no altera los totales.
+ * Una invitación que el enlace personal no atendería (invitationBlockers, igual que en
+ * loadContext_) queda "en revisión": se reporta y cuenta como pendiente.
  */
 function allRecords_(ss) {
   var rows = { invitations: invitations_(ss), people: peopleRows_(ss), responses: responseRows_(readTab_(ss, BtRules.RESPONSES_TAB)) };
   var valid = function (p) { return !p.errors.length; };
   // Una invitación con un detalle menor (teléfono, lado, notas) se sigue atendiendo, así que también cuenta.
   var servable = function (p) { return !(p.blocking || p.errors).length; };
+  var review = BtRules.invitationsInReview(rows);
   return {
     invitations: rows.invitations.filter(servable).map(valueOf_),
     people: rows.people.filter(valid).map(valueOf_),
     responses: rows.responses.filter(valid).map(valueOf_),
-    issues: BtRules.rowIssues(rows),
+    inReview: review.map(function (r) { return r.id; }),
+    issues: BtRules.rowIssues(rows).concat(review.map(BtRules.inReviewIssue)),
   };
 }
 
@@ -886,9 +991,16 @@ function rosterIssues_(all) {
 }
 
 function summary_() {
-  var ss = ss_();
+  var ss;
+  try {
+    ss = webSs_();
+  } catch (err) {
+    var failure = sheetFailure_(err);
+    if (failure) return failure;
+    throw err;
+  }
   var all = allRecords_(ss);
-  var s = BtRules.summarize(all.invitations, all.people, all.responses);
+  var s = BtRules.summarize(all.invitations, all.people, all.responses, all.inReview);
   s.rsvpOpen = rsvpOpen_(ss);
   return { ok: true, result: { summary: s, issues: rosterIssues_(all).slice(0, 50) } };
 }
@@ -1097,7 +1209,13 @@ function btSetup() {
   config.getRange(open.row, 2).insertCheckboxes();
   setupLinkFormula_(ss);
   refreshSummary_(ss);
-  SpreadsheetApp.getUi().alert('Estructura lista. Escribe la dirección pública en Config → url_publica y usa "Generar enlaces faltantes".');
+  // La aplicación web no tiene hoja activa: atiende la que quede registrada aquí.
+  var replaced = registerSheet_(ss);
+  SpreadsheetApp.getUi().alert(
+    'Estructura lista y hoja registrada para la aplicación web' +
+      (replaced ? ' (sustituye a la hoja registrada antes)' : '') +
+      '. Escribe la dirección pública en Config → url_publica y usa "Generar enlaces faltantes".'
+  );
 }
 
 function colLetter_(index) {
@@ -1129,7 +1247,7 @@ function setupLinkFormula_(ss) {
  */
 function refreshSummary_(ss, all) {
   all = all || allRecords_(ss);
-  var s = BtRules.summarize(all.invitations, all.people, all.responses);
+  var s = BtRules.summarize(all.invitations, all.people, all.responses, all.inReview);
   var sheet = ss.getSheetByName(BtRules.SUMMARY_TAB) || ss.insertSheet(BtRules.SUMMARY_TAB);
   var rows = [
     ['Indicador', 'Valor'],
@@ -1140,6 +1258,7 @@ function refreshSummary_(ss, all) {
     ['Invitaciones que asistirán', s.attending],
     ['Invitaciones que no asistirán', s.declined],
     ['Invitaciones sin respuesta', s.pending],
+    ['De ellas, en revisión (ver "Revisar la lista")', s.inReview],
     ['Personas confirmadas', s.attendingPeople],
     ['Lugares sin usar en respuestas (deciden los novios)', s.unusedSeats],
     ['Filas con problemas (ver "Revisar la lista")', all.issues.length],

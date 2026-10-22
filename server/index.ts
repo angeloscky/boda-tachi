@@ -9,8 +9,8 @@ const config = loadConfig(flag ? { rsvpBackend: parseBackend(flag.split('=')[1])
 const db: DB | null = config.rsvpBackend === 'demo' ? openDb(config.dbPath) : null;
 const app = createApp(db, config);
 
-const server = app.listen(config.port, () => {
-  console.log(`Boda Sofía e Isaac · http://localhost:${config.port}`);
+const onListening = () => {
+  console.log(`Boda Sofía e Isaac · http://localhost:${config.port}${config.host ? ` (escuchando en ${config.host})` : ''}`);
   console.log(`Enlace general: ${config.publicBaseUrl}/`);
   if (db) {
     const created = process.env.DEMO_SEED === '0' ? 0 : seedDemo(db);
@@ -29,7 +29,8 @@ const server = app.listen(config.port, () => {
   if (config.production && !config.publicBaseUrl.startsWith('https://')) {
     console.warn('Aviso: PUBLIC_BASE_URL no usa https://; los enlaces viajarían sin cifrar y las cookies del panel no se marcan como seguras.');
   }
-});
+};
+const server = config.host ? app.listen(config.port, config.host, onListening) : app.listen(config.port, onListening);
 
 function shutdown() {
   server.close(() => {

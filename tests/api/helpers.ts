@@ -17,6 +17,7 @@ export function tempDbPath(name = 'test') {
 export function testConfig(dbPath: string, overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     port: 0,
+    host: null,
     publicBaseUrl: 'https://boda.example',
     dbPath,
     adminPasswordHash: null,

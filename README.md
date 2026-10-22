@@ -82,6 +82,7 @@ Los lugares que una familia no use quedan a decisión de los novios: no se reasi
 | `DEMO_IN_PRODUCTION` | Con `NODE_ENV=production`, la demostración solo arranca si vale `1` (para publicar una demostración a propósito). En producción también es obligatorio `PUBLIC_BASE_URL`. |
 | `TRUST_PROXY` | Número de proxies delante del servidor (0 si se expone directo). Necesario para limitar intentos por IP real. |
 | `PORT`, `COOKIE_SECURE`, `MESSAGING_PROVIDER` | Puerto (3000), cookies solo HTTPS (automático con `https://`), mensajes (`simulation`, no envía nada). |
+| `HOST` | Interfaz donde escucha el servidor. Vacío = todas (lo de Node); en Render, `0.0.0.0`. |
 
 ## Panel
 
@@ -103,7 +104,7 @@ El panel de la demostración prepara para cada invitación: destinatario, teléf
 
 ```bash
 npm run typecheck     # interfaz, servidor, pruebas y scripts
-npm test              # 75 pruebas de reglas, API, modos y Apps Script con dobles (Vitest + Supertest)
+npm test              # 84 pruebas de reglas, API, modos y Apps Script con dobles (Vitest + Supertest)
 npm run build
 npm run test:e2e      # 36 recorridos en navegador: 18 en móvil y 18 en escritorio (Playwright)
 ```
@@ -114,9 +115,12 @@ En otro equipo, la primera vez: `npx playwright install chromium`. Las pruebas u
 
 ## Publicación
 
-Pendiente: no se creó ninguna cuenta de alojamiento. En modo `sheets` el servidor no guarda datos (las sesiones del panel viven en memoria), así que basta un alojamiento Node gratuito sin disco persistente; los planes gratuitos suelen dormir el servicio tras inactividad, y la primera visita tarda unos segundos más. Revisa las condiciones vigentes del plan antes de elegir. El `Dockerfile` sigue funcionando como contenedor sin estado; el volumen solo hace falta para la demostración.
+Pendiente: no se creó ninguna cuenta de alojamiento ni se compró dominio.
 
-Un hosting de archivos estáticos solo sirve para la vista de diseño (`npm run build:static`, sale en `dist/static-demo/`), que nunca registra respuestas.
+- **Revisión gratuita en Render (preparado):** guía en [`docs/alojamiento-render.md`](docs/alojamiento-render.md), con build `npm ci && npm run build`, start `npm start`, health check `/api/health`, sin disco ni base de datos y con el subdominio `onrender.com`. Mientras Google esté desconectado, `RSVP_BACKEND` va vacío y la confirmación aparece como no habilitada. En el plan Free el servicio se suspende tras 15 minutos sin tráfico, y volver a levantarlo tarda aproximadamente un minuto. Es una ruta para revisar; la experiencia final para invitados queda por comprobar.
+- **Versión de Node:** `.node-version` fija la 22.22.0, con la que se probó todo.
+- **Contenedor:** el `Dockerfile` sigue funcionando como contenedor sin estado; el volumen solo hace falta para la demostración.
+- **Hosting estático:** solo sirve para la vista de diseño (`npm run build:static`, sale en `dist/static-demo/`), que nunca registra respuestas.
 
 ## Logo
 

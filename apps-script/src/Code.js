@@ -23,14 +23,20 @@
  *
  * Propiedades del script (Configuración del proyecto → Propiedades del script):
  *   BT_SHARED_SECRET   el mismo valor que SHEETS_SHARED_SECRET en el servidor (≥ 32 caracteres)
+ *   BT_SPREADSHEET_ID  la hoja que atiende la aplicación web; la registra el menú
+ *                      Boda → Preparar estructura (no hace falta escribirla a mano)
  *
- * El script va vinculado a la hoja (Extensiones → Apps Script) y solo pide acceso
- * a esa hoja (alcance spreadsheets.currentonly).
+ * El script va vinculado a la hoja (Extensiones → Apps Script). Como aplicación web
+ * no hay "hoja activa": las operaciones abren la hoja registrada con openById, que
+ * requiere el alcance https://www.googleapis.com/auth/spreadsheets (acceso a las
+ * hojas de la cuenta que implementa). El invitado nunca elige el archivo: el ID solo
+ * sale de las propiedades del script.
  * ========================================================================== */
 
 var BT_TZ = 'America/Mexico_City';
 var BT_LOCK_MS = 10000;
 var BT_MAX_PAYLOAD = 20000;
+var BT_SHEET_PROP = 'BT_SPREADSHEET_ID';
 
 // ---------------------------------------------------------------- web app
 
@@ -58,11 +64,21 @@ function doGet() {
 }
 
 function dispatch_(op, payload) {
-  if (op === 'ping') return { ok: true, result: { schemaVersion: BtRules.SHEETS_SCHEMA_VERSION, rulesVersion: BtRules.RULES_VERSION, tabs: checkStructure_(ss_()) } };
+  if (op === 'ping') return ping_();
   if (op === 'getInvitation') return getInvitation_(payload && payload.token);
   if (op === 'saveResponse') return saveResponse_(payload && payload.token, payload && payload.request);
   if (op === 'summary') return summary_();
   return { ok: false, status: 400, code: 'unknown_op', message: 'Operación no permitida.' };
+}
+
+function ping_() {
+  try {
+    return { ok: true, result: { schemaVersion: BtRules.SHEETS_SCHEMA_VERSION, rulesVersion: BtRules.RULES_VERSION, tabs: checkStructure_(webSs_()) } };
+  } catch (err) {
+    var failure = sheetFailure_(err);
+    if (failure) return failure;
+    throw err;
+  }
 }
 
 function secret_() {
@@ -111,8 +127,44 @@ function sameText_(a, b) {
 
 // ---------------------------------------------------------------- lectura de la hoja (por encabezado, nunca por posición)
 
-function ss_() {
-  return SpreadsheetApp.getActiveSpreadsheet();
+/**
+ * Hoja de las operaciones de la aplicación web. Ahí no existe getActiveSpreadsheet()
+ * (devuelve null), así que se abre la hoja registrada en las propiedades del script.
+ * La solicitud del invitado no puede elegir otra: el ID no viene en ningún payload.
+ */
+function webSs_() {
+  var id = String(PropertiesService.getScriptProperties().getProperty(BT_SHEET_PROP) || '').trim();
+  if (!id) throw sheetError_('sheet_not_configured', 'El script no tiene registrada la hoja. Ábrela y usa Boda → Preparar estructura.');
+  if (!/^[A-Za-z0-9_-]{20,100}$/.test(id)) {
+    throw sheetError_('sheet_not_configured', 'El ID guardado en ' + BT_SHEET_PROP + ' no es un ID de hoja válido (¿se pegó la URL completa?). Abre la hoja y usa Boda → Preparar estructura.');
+  }
+  var ss = null;
+  try {
+    ss = SpreadsheetApp.openById(id);
+  } catch (err) {
+    console.error(err);
+  }
+  if (!ss) throw sheetError_('sheet_unavailable', 'No se pudo abrir la hoja registrada (¿se borró, cambió de dueño o faltan permisos?).');
+  return ss;
+}
+
+function sheetError_(code, message) {
+  var err = new Error(message);
+  err.btSheet = code;
+  return err;
+}
+
+/** Hoja sin registrar o inaccesible: error claro y controlado, nunca "conectado" ni "guardado". */
+function sheetFailure_(err) {
+  return err && err.btSheet ? { ok: false, status: 503, code: err.btSheet, message: err.message, retryable: false } : null;
+}
+
+/** Menú (contexto vinculado): registra esta hoja como la que atiende la aplicación web. */
+function registerSheet_(ss) {
+  var props = PropertiesService.getScriptProperties();
+  var previous = props.getProperty(BT_SHEET_PROP);
+  props.setProperty(BT_SHEET_PROP, ss.getId());
+  return previous && previous !== ss.getId() ? previous : null;
 }
 
 function norm_(h) {
@@ -263,13 +315,13 @@ function guestPayload_(inv, people, response, open, baseRevision) {
 function getInvitation_(token) {
   if (typeof token !== 'string' || !BtRules.LIVE_TOKEN_RE.test(token)) return NOT_FOUND;
   try {
-    var ss = ss_();
+    var ss = webSs_();
     var ctx = loadContext_(ss, token);
     if (ctx.error) return ctx.error;
     return { ok: true, result: guestPayload_(ctx.inv, ctx.people, ctx.current, rsvpOpen_(ss), ctx.baseRevision) };
   } catch (err) {
     console.error(err);
-    return { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'read_failed', message: String((err && err.message) || err), retryable: true };
+    return sheetFailure_(err) || { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'read_failed', message: String((err && err.message) || err), retryable: true };
   }
 }
 
@@ -282,7 +334,7 @@ function saveResponse_(token, request) {
     return { ok: false, status: 503, code: 'busy', message: 'El registro está ocupado; inténtalo de nuevo.', retryable: true };
   }
   try {
-    var ss = ss_();
+    var ss = webSs_();
     var ctx = loadContext_(ss, token);
     if (ctx.error) return ctx.error;
     var inv = ctx.inv;
@@ -318,7 +370,7 @@ function saveResponse_(token, request) {
     return { ok: true, result: result };
   } catch (err) {
     console.error(err);
-    return { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'write_failed', message: String((err && err.message) || err), retryable: true };
+    return sheetFailure_(err) || { ok: false, status: 500, code: err && err.btStructure ? 'structure' : 'write_failed', message: String((err && err.message) || err), retryable: true };
   } finally {
     lock.releaseLock();
   }
@@ -352,17 +404,21 @@ function writeResponse_(table, rowNumber, r) {
 /**
  * Registros de la hoja para totales y revisión. Las filas con errores de formato no se
  * cuentan (se reportan como problemas): así una fila mal capturada no altera los totales.
+ * Una invitación que el enlace personal no atendería (invitationBlockers, igual que en
+ * loadContext_) queda "en revisión": se reporta y cuenta como pendiente.
  */
 function allRecords_(ss) {
   var rows = { invitations: invitations_(ss), people: peopleRows_(ss), responses: responseRows_(readTab_(ss, BtRules.RESPONSES_TAB)) };
   var valid = function (p) { return !p.errors.length; };
   // Una invitación con un detalle menor (teléfono, lado, notas) se sigue atendiendo, así que también cuenta.
   var servable = function (p) { return !(p.blocking || p.errors).length; };
+  var review = BtRules.invitationsInReview(rows);
   return {
     invitations: rows.invitations.filter(servable).map(valueOf_),
     people: rows.people.filter(valid).map(valueOf_),
     responses: rows.responses.filter(valid).map(valueOf_),
-    issues: BtRules.rowIssues(rows),
+    inReview: review.map(function (r) { return r.id; }),
+    issues: BtRules.rowIssues(rows).concat(review.map(BtRules.inReviewIssue)),
   };
 }
 
@@ -371,9 +427,16 @@ function rosterIssues_(all) {
 }
 
 function summary_() {
-  var ss = ss_();
+  var ss;
+  try {
+    ss = webSs_();
+  } catch (err) {
+    var failure = sheetFailure_(err);
+    if (failure) return failure;
+    throw err;
+  }
   var all = allRecords_(ss);
-  var s = BtRules.summarize(all.invitations, all.people, all.responses);
+  var s = BtRules.summarize(all.invitations, all.people, all.responses, all.inReview);
   s.rsvpOpen = rsvpOpen_(ss);
   return { ok: true, result: { summary: s, issues: rosterIssues_(all).slice(0, 50) } };
 }
@@ -582,7 +645,13 @@ function btSetup() {
   config.getRange(open.row, 2).insertCheckboxes();
   setupLinkFormula_(ss);
   refreshSummary_(ss);
-  SpreadsheetApp.getUi().alert('Estructura lista. Escribe la dirección pública en Config → url_publica y usa "Generar enlaces faltantes".');
+  // La aplicación web no tiene hoja activa: atiende la que quede registrada aquí.
+  var replaced = registerSheet_(ss);
+  SpreadsheetApp.getUi().alert(
+    'Estructura lista y hoja registrada para la aplicación web' +
+      (replaced ? ' (sustituye a la hoja registrada antes)' : '') +
+      '. Escribe la dirección pública en Config → url_publica y usa "Generar enlaces faltantes".'
+  );
 }
 
 function colLetter_(index) {
@@ -614,7 +683,7 @@ function setupLinkFormula_(ss) {
  */
 function refreshSummary_(ss, all) {
   all = all || allRecords_(ss);
-  var s = BtRules.summarize(all.invitations, all.people, all.responses);
+  var s = BtRules.summarize(all.invitations, all.people, all.responses, all.inReview);
   var sheet = ss.getSheetByName(BtRules.SUMMARY_TAB) || ss.insertSheet(BtRules.SUMMARY_TAB);
   var rows = [
     ['Indicador', 'Valor'],
@@ -625,6 +694,7 @@ function refreshSummary_(ss, all) {
     ['Invitaciones que asistirán', s.attending],
     ['Invitaciones que no asistirán', s.declined],
     ['Invitaciones sin respuesta', s.pending],
+    ['De ellas, en revisión (ver "Revisar la lista")', s.inReview],
     ['Personas confirmadas', s.attendingPeople],
     ['Lugares sin usar en respuestas (deciden los novios)', s.unusedSeats],
     ['Filas con problemas (ver "Revisar la lista")', all.issues.length],

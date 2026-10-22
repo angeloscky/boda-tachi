@@ -11,9 +11,10 @@ invitado (navegador) → servidor de la invitación (/api) → POST firmado → 
 - El navegador nunca habla con Google ni conoce el secreto. Solo llama a la API de la invitación con su enlace personal.
 - El servidor firma cada solicitud con HMAC-SHA256 (`SHEETS_SHARED_SECRET`) e incluye operación, hora y un nonce de un solo uso. El script rechaza firmas inválidas, solicitudes de más de 5 minutos y nonces repetidos.
 - El script solo acepta cuatro operaciones: `ping`, `getInvitation`, `saveResponse` y `summary`. No hay lectura ni escritura de rangos arbitrarios.
+- **Qué hoja usa la aplicación web.** Al ejecutarse como aplicación web no existe una "hoja activa" (`getActiveSpreadsheet()` devuelve `null`; ver https://developers.google.com/apps-script/guides/bound). Por eso el script guarda el ID de su hoja en la propiedad privada `BT_SPREADSHEET_ID`, que registra el menú **Boda → Preparar estructura**, y las cuatro operaciones abren esa hoja con `SpreadsheetApp.openById`. Ninguna solicitud puede elegir otro archivo: el ID no viaja en el payload, y los campos de más se ignoran. Si falta el registro o la hoja no se puede abrir, el script responde un error controlado (`sheet_not_configured` o `sheet_unavailable`). El panel muestra "no conectado" con el motivo. El invitado ve "No pudimos cargar tu invitación en este momento" al abrir su enlace, o "No pudimos comprobar que tu respuesta se guardara" si ya la tenía abierta y guarda. Nunca se informa un guardado. Ese aviso pide intentarlo de nuevo, aunque este error no se resuelve solo: lo corrige quien administra la hoja.
 - Cada respuesta del script va firmada y repite la operación y el nonce. El servidor sigue a mano la redirección de Google (`script.google.com` → `script.googleusercontent.com`, y ningún otro dominio), exige JSON y verifica la firma. Una página de inicio de sesión, un HTML, una firma que no cuadra o un tiempo agotado se tratan como error: el invitado ve "no se registró; inténtalo de nuevo", nunca un éxito.
 - `saveResponse` lee, valida con las mismas reglas del servidor (`shared/rsvp-rules.ts`, empaquetadas en `Code.gs`) y escribe bajo `LockService`. Antes de escribir comprueba que la fila sigue siendo la de esa invitación; después hace `flush()` y vuelve a leer la fila, y solo si coincide responde éxito. Bloqueo ocupado o escritura fallida = error reintentable. Tras un tiempo agotado el invitado ve "no pudimos comprobar que se guardara; inténtalo de nuevo" (reintentar no duplica).
-- Como la hoja se edita a mano, antes de mostrar o guardar una invitación el script exige que su ID, grupo, cupo, `activa` y token sean válidos, que su `id_invitacion` no esté repetido (sin importar mayúsculas), que sus personas sean válidas y no aparezcan en otra invitación, y que tenga a lo sumo una respuesta válida. Si algo falla, la familia ve "Tu invitación tiene un detalle pendiente de revisar. Escríbenos" y no se lee ni escribe nada; el detalle aparece en **Revisar la lista** y en el panel. Un teléfono, lado, contacto o notas mal capturados también aparecen ahí, pero no impiden que la familia confirme. Una invitación con `activa` = `no` responde como inexistente.
+- Como la hoja se edita a mano, antes de mostrar o guardar una invitación el script exige que su ID, grupo, cupo, `activa` y token sean válidos, que su `id_invitacion` no esté repetido (sin importar mayúsculas), que sus personas sean válidas y no aparezcan en otra invitación, y que tenga a lo sumo una fila en Respuestas. Esa fila debe ser válida, sin personas repetidas (sin importar mayúsculas), solo con personas de esa invitación y sin superar el cupo. Si algo falla, la familia ve "Tu invitación tiene un detalle pendiente de revisar. Escríbenos" y no se lee ni escribe nada; el detalle aparece en **Revisar la lista** y en el panel. Un teléfono, lado, contacto o notas mal capturados también aparecen ahí, pero no impiden que la familia confirme. Una invitación con `activa` = `no` responde como inexistente.
 - El script guarda en sus propiedades la última revisión escrita de cada invitación (`rev:<id>`). Si alguien borra a mano la fila de una respuesta, la siguiente revisión continúa después de esa: un teléfono con la vista anterior recibe el aviso de conflicto en lugar de sobrescribir. **Revisar la lista** también registra la revisión de las respuestas capturadas a mano.
 
 ## Estructura del archivo
@@ -40,7 +41,7 @@ Un solo archivo con estas pestañas. Las columnas se leen **por su encabezado**,
 **Respuestas** (todas técnicas; las escribe el script) — `id_invitacion`, `personas_seleccionadas` (IDs separados por coma), `estado` (`asistirá` / `no asistirá`), `revision`, `fecha_hora`, `id_solicitud`.
 
 - Una sola fila vigente por invitación. Cambiar la respuesta reescribe esa fila y sube `revision`; no se guardan versiones duplicadas en otras pestañas.
-- Los totales se derivan de la fila vigente con las reglas del servidor: el panel los pide con la operación `summary` y la pestaña **Resumen** se recalcula con **Boda → Actualizar resumen** (también al revisar la lista). Las filas con errores de formato no se cuentan y aparecen como problemas.
+- Los totales se derivan de la fila vigente con las reglas del servidor: el panel los pide con la operación `summary` y la pestaña **Resumen** se recalcula con **Boda → Actualizar resumen** (también al revisar la lista). Las filas con errores de formato no se cuentan y aparecen como problemas. Una invitación que su enlace no atiende ("detalle pendiente de revisar") cuenta como pendiente, aunque tenga una fila válida en Respuestas: aparece "En revisión" en **Revisar la lista** y en el panel, y el Resumen la muestra en "De ellas, en revisión". Nada se corrige solo.
 
 **Config** — `confirmaciones_abiertas` (casilla), `url_publica` (igual a `PUBLIC_BASE_URL`), `version_estructura`.
 
@@ -53,8 +54,16 @@ Requiere una cuenta de Google de los novios o de quien administre. No tiene cost
 1. Crea una hoja de cálculo nueva en Google Drive. Déjala **privada** y compártela solo con quien administra.
 2. Opcional: importa las plantillas (Archivo → Importar → Subir, "Insertar hojas nuevas"), una por pestaña, y renómbralas `Invitaciones`, `Personas` y `Respuestas`.
 3. Extensiones → Apps Script. Reemplaza el contenido de `Código.gs` por `apps-script/Code.gs`. En Configuración del proyecto activa "Mostrar el archivo de manifiesto" y reemplaza `appsscript.json` por `apps-script/appsscript.json`.
+   El manifiesto pide dos permisos:
+   - `https://www.googleapis.com/auth/spreadsheets`: leer y escribir hojas de cálculo. Hace falta porque la aplicación web abre la hoja con `openById`; el alcance anterior, `spreadsheets.currentonly`, solo cubre la hoja "actual", y en la aplicación web no la hay. Este permiso alcanza a las hojas a las que tenga acceso la cuenta que implementa, aunque el código solo abre la registrada en `BT_SPREADSHEET_ID`. La nota de autorización de `openById` en la referencia de Google no se pudo leer completa desde el entorno de desarrollo, así que este alcance se eligió por la guía de alcances de Google y está **pendiente de confirmar** en la pantalla de autorización real.
+   - `https://www.googleapis.com/auth/script.container.ui`: el menú **Boda** dentro de la hoja.
 4. Configuración del proyecto → Propiedades del script → agrega `BT_SHARED_SECRET` con un secreto de al menos 32 caracteres (el mismo que irá en `SHEETS_SHARED_SECRET`).
-5. Recarga la hoja. Aparece el menú **Boda**. Elige **Preparar estructura** (Google pedirá autorizar el script la primera vez). Crea lo que falte, agrega validaciones, notas, la fórmula de `enlace`, la pestaña Resumen y las protecciones. No borra datos de Invitaciones, Personas ni Respuestas (la pestaña Resumen sí se reescribe).
+5. Recarga la hoja. Aparece el menú **Boda**. Elige **Preparar estructura** (Google pedirá autorizar el script la primera vez):
+   - crea lo que falte y agrega validaciones, notas, la fórmula de `enlace`, la pestaña Resumen y las protecciones;
+   - **registra esta hoja** en `BT_SPREADSHEET_ID` para la aplicación web;
+   - no borra datos de Invitaciones, Personas ni Respuestas; la pestaña Resumen sí se reescribe.
+
+   Si algún día se usa otra hoja, se vuelve a correr **Preparar estructura** desde ella.
 6. En **Config**, escribe `url_publica` (por ejemplo `https://tu-dominio`).
 7. Captura Invitaciones y Personas. Luego **Boda → Generar enlaces faltantes** y **Boda → Revisar la lista**.
 8. Implementar → Nueva implementación → Tipo: Aplicación web. *Ejecutar como:* Yo. *Quién tiene acceso:* Cualquier persona. Copia la URL que termina en `/exec`.
@@ -65,9 +74,12 @@ Al cambiar el código del script: Implementar → Gestionar implementaciones →
 
 ### Verificación pendiente con una hoja real
 
-- [ ] El manifiesto se acepta tal cual (alcances `spreadsheets.currentonly` y `script.container.ui`) y la autorización no pide más permisos.
+- [ ] El manifiesto se acepta tal cual (alcances `spreadsheets` y `script.container.ui`) y la pantalla de autorización no pide otros permisos.
+- [ ] **Preparar estructura** registra `BT_SPREADSHEET_ID` (visible en Configuración del proyecto → Propiedades del script).
+- [ ] Desde el servidor, con la aplicación web implementada, `ping` y `summary` abren la hoja registrada sin hoja activa. Si se borra `BT_SPREADSHEET_ID`, el panel muestra "no conectado" con el motivo.
 - [ ] **Preparar estructura** crea validaciones, protecciones, la fórmula de `enlace` y el Resumen sin errores de sintaxis.
 - [ ] Una fila con `id_invitacion` repetido muestra "detalle pendiente de revisar" a ambas familias y aparece en **Revisar la lista**.
+- [ ] Una respuesta capturada a mano con una persona repetida (por ejemplo `P1, p1`) deja la invitación "En revisión" en **Revisar la lista**, en el panel y en el Resumen, y no suma en los totales.
 - [ ] El panel muestra "Conectado" y totales correctos.
 - [ ] Un enlace de prueba (familia ficticia) carga solo sus personas; guardar escribe una fila en Respuestas y `revision` sube al cambiar.
 - [ ] Dos teléfonos guardando a la vez: uno recibe el aviso de conflicto con la respuesta vigente.
@@ -89,7 +101,7 @@ Al cambiar el código del script: Implementar → Gestionar implementaciones →
 - Cambios de enlaces: usa siempre el menú (**Generar**, **Regenerar**, **Revocar**), que trabaja bajo el bloqueo. Revocar escribe `revocado`; **Generar enlaces faltantes** lo respeta y solo **Regenerar** le da un enlace nuevo.
 - Cambios sensibles con confirmaciones abiertas (cupo, personas, activar/desactivar, una respuesta recibida por teléfono):
   1. **Boda → Cerrar confirmaciones.** Las familias ven su respuesta pero no pueden cambiarla.
-  2. Haz el cambio. No bajes el cupo por debajo de las personas confirmadas ni desactives a alguien confirmado. Para registrar una respuesta a mano, edita la fila de esa invitación en Respuestas: `estado` exactamente `asistirá` o `no asistirá`, los IDs de persona separados por coma, `revision` + 1 y un `id_solicitud` nuevo. Evita borrar filas de Respuestas: si hace falta quitar una respuesta, borra la fila con las confirmaciones cerradas y luego usa **Revisar la lista** (el script continúa la revisión después de la última escrita, así que un teléfono atrasado recibe conflicto).
+  2. Haz el cambio. No bajes el cupo por debajo de las personas confirmadas ni desactives a alguien confirmado. Para registrar una respuesta a mano, edita la fila de esa invitación en Respuestas: `estado` exactamente `asistirá` o `no asistirá`, los IDs de persona separados por coma (sin repetir, solo de esa invitación y sin pasar del cupo), `revision` + 1 y un `id_solicitud` nuevo. Evita borrar filas de Respuestas: si hace falta quitar una respuesta, borra la fila con las confirmaciones cerradas y luego usa **Revisar la lista** (el script continúa la revisión después de la última escrita, así que un teléfono atrasado recibe conflicto).
   3. **Boda → Revisar la lista** y corrige lo que marque.
   4. **Boda → Abrir confirmaciones.**
 - Los lugares que una familia no use no se reasignan solos ni los puede tomar otra familia; decidir qué hacer con ellos es cosa de los novios.

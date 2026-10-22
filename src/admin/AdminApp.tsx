@@ -168,7 +168,7 @@ function Stats({ summary, children }: { summary: AdminSummary; children?: ReactN
       <Stat label="Personas autorizadas" value={summary.people} sub="en invitaciones activas" />
       <Stat label="Asistirán" value={summary.attending} sub="invitaciones" />
       <Stat label="No asistirán" value={summary.declined} sub="invitaciones" />
-      <Stat label="Pendientes" value={summary.pending} sub="sin respuesta" />
+      <Stat label="Pendientes" value={summary.pending} sub={summary.inReview ? `sin respuesta válida; ${summary.inReview} en revisión` : 'sin respuesta'} />
       <Stat label="Lugares sin usar" value={summary.unusedSeats} sub="en respuestas; deciden los novios" />
       {children}
     </section>

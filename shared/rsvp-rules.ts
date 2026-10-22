@@ -401,11 +401,28 @@ export const splitIds = (v: unknown) =>
     .split(/[,;\s]+/)
     .filter(Boolean);
 
+/** IDs que reaparecen en una selección (sin distinguir mayúsculas), en el orden en que se repiten. */
+export function repeatedIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    if (seen.has(key(id))) out.push(id);
+    else seen.add(key(id));
+  }
+  return out;
+}
+
+const repeatedMessage = (ids: string[]) =>
+  `La respuesta repite a ${ids.length === 1 ? 'la persona' : 'las personas'} ${ids.join(', ')}; corrige la selección en la hoja.`;
+
 export function parseResponseRow(raw: Record<string, unknown>): RowResult<ResponseRecord> {
   const errors: string[] = [];
   const invitationId = text(raw.invitationId);
   const status = parseStatusLabel(raw.status);
   const personIds = splitIds(raw.personIds);
+  // Una respuesta capturada a mano con "P1, P1" no se corrige sola: se reporta para que se arregle en la hoja.
+  const repeated = repeatedIds(personIds);
+  if (repeated.length) errors.push(repeatedMessage(repeated));
   const revision = Number(text(raw.revision));
   if (!invitationId) errors.push('Falta el ID de invitación de la respuesta.');
   if (!status) errors.push('El estado debe ser "asistirá" o "no asistirá".');
@@ -497,6 +514,8 @@ export function checkRoster(
       add('error', 'Respuestas', r.invitationId, 'La invitación de esta respuesta no existe.');
       continue;
     }
+    const repeated = repeatedIds(r.personIds);
+    if (repeated.length) add('error', 'Respuestas', r.invitationId, repeatedMessage(repeated));
     for (const pid of r.personIds) {
       const p = personById.get(key(pid));
       if (!p || key(p.invitationId) !== key(inv.id)) add('error', 'Respuestas', r.invitationId, `La persona ${pid} no pertenece a esta invitación.`);
@@ -538,6 +557,15 @@ export function invitationBlockers(target: RowResult<InvitationRecord>, rows: Sh
   const responses = rows.responses.filter((r) => key(r.value.invitationId) === id);
   if (responses.length > 1) out.push('Hay más de una respuesta para esta invitación.');
   else if (responses.length === 1 && responses[0].errors.length) out.push(`Respuesta: ${responses[0].errors.join(' ')}`);
+  else if (responses.length === 1) {
+    // Una respuesta escrita a mano también debe corresponder a esta invitación y a su cupo.
+    const r = responses[0].value;
+    const ownIds = new Set(own.map((p) => key(p.value.id)));
+    const foreign = r.personIds.filter((pid) => !ownIds.has(key(pid)));
+    if (foreign.length) out.push(`Respuesta: ${foreign.join(', ')} no ${foreign.length === 1 ? 'pertenece' : 'pertenecen'} a esta invitación.`);
+    const seats = target.value.seats;
+    if (r.status === 'attending' && seats !== null && r.personIds.length > seats) out.push(`Respuesta: confirma ${r.personIds.length} personas con cupo de ${seats}.`);
+  }
   return out;
 }
 
@@ -553,6 +581,29 @@ export function rowIssues(rows: SheetRows): RosterIssue[] {
   return issues;
 }
 
+/**
+ * Invitaciones activas que el enlace personal no atiende por un problema de la hoja (las mismas
+ * reglas que usa la consulta del invitado). No cuentan como respondidas hasta que se corrija la hoja.
+ */
+export function invitationsInReview(rows: SheetRows): { id: string; blockers: string[] }[] {
+  const out: { id: string; blockers: string[] }[] = [];
+  for (const r of rows.invitations) {
+    // Como en la consulta del invitado: una fila de demostración responde como inexistente, no "en revisión".
+    if (!r.value.id || !r.value.active || DEMO_ID_RE.test(r.value.id) || (r.blocking ?? r.errors).length) continue;
+    const blockers = invitationBlockers(r, rows);
+    if (blockers.length) out.push({ id: r.value.id, blockers });
+  }
+  return out;
+}
+
+/** Entrada de la revisión de la lista para una invitación en revisión. */
+export const inReviewIssue = (r: { id: string; blockers: string[] }): RosterIssue => ({
+  severity: 'error',
+  tab: 'Invitaciones',
+  id: r.id,
+  message: `En revisión: su enlace personal muestra "detalle pendiente de revisar" y no cuenta como respondida hasta corregir la hoja. ${r.blockers.join(' ')}`,
+});
+
 export interface RosterSummary {
   invitations: number;
   incomplete: number;
@@ -564,20 +615,38 @@ export interface RosterSummary {
   pending: number;
   /** Lugares asignados que una respuesta ya dejó sin usar; quedan a decisión de los novios. */
   unusedSeats: number;
+  /** Invitaciones en revisión por un problema de la hoja; se cuentan dentro de `pending`. */
+  inReview: number;
 }
 
-/** Totales derivados del registro vigente (invitaciones activas). */
-export function summarize(invitations: InvitationRecord[], people: PersonRecord[], responses: ResponseRecord[]): RosterSummary {
+/**
+ * Totales derivados del registro vigente (invitaciones activas). `inReview`: IDs de las
+ * invitaciones que el enlace personal no atiende (ver invitationsInReview); cuentan como pendientes.
+ */
+export function summarize(invitations: InvitationRecord[], people: PersonRecord[], responses: ResponseRecord[], inReview: string[] = []): RosterSummary {
   const active = invitations.filter((i) => i.active);
   const activeIds = new Set(active.map((i) => key(i.id)));
   const activePeople = new Map(people.filter((p) => p.active && activeIds.has(key(p.invitationId))).map((p) => [key(p.id), p] as const));
   const byInv = new Map(responses.map((r) => [key(r.invitationId), r] as const));
-  const s: RosterSummary = { invitations: active.length, incomplete: 0, seatsAssigned: 0, people: activePeople.size, attendingPeople: 0, attending: 0, declined: 0, pending: 0, unusedSeats: 0 };
+  const review = new Set(inReview.map(key));
+  const invOfPerson = new Map(people.map((p) => [key(p.id), key(p.invitationId)] as const));
+  // Una respuesta incoherente (personas repetidas o de otra invitación, más personas que cupo) no cuenta
+  // como confirmación: queda pendiente hasta corregirla, y la revisión de la lista la reporta.
+  const coherent = (inv: InvitationRecord, r: ResponseRecord) =>
+    !repeatedIds(r.personIds).length &&
+    r.personIds.every((pid) => invOfPerson.get(key(pid)) === key(inv.id)) &&
+    (r.status !== 'attending' || inv.seats === null || r.personIds.length <= inv.seats);
+  const s: RosterSummary = { invitations: active.length, incomplete: 0, seatsAssigned: 0, people: activePeople.size, attendingPeople: 0, attending: 0, declined: 0, pending: 0, unusedSeats: 0, inReview: 0 };
   for (const inv of active) {
     if (inv.seats === null) s.incomplete++;
     else s.seatsAssigned += inv.seats;
+    if (review.has(key(inv.id))) {
+      s.pending++;
+      s.inReview++;
+      continue;
+    }
     const r = byInv.get(key(inv.id));
-    if (!r) {
+    if (!r || !coherent(inv, r)) {
       s.pending++;
       continue;
     }

@@ -52,6 +52,12 @@ export class FakeSheet {
 }
 
 const protection = { setDescription: () => protection, setWarningOnly: () => protection };
+const validation = {
+  requireValueInList: () => validation,
+  requireNumberBetween: () => validation,
+  setAllowInvalid: () => validation,
+  build: () => ({}),
+};
 
 class FakeRange {
   constructor(
@@ -103,14 +109,40 @@ class FakeRange {
 export const WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbPRUEBAprueba0123456789abcdef/exec';
 export const SECRET = 'secreto-compartido-de-prueba-0123456789';
 
-export function createGas(tabs: Record<string, unknown[][]>, opts: { secret?: string | null; codePath?: string } = {}) {
+/** ID ficticio de la hoja de prueba (formato de ID de Google: letras, números, "-" y "_"). */
+export const SHEET_ID = '1PruebaHojaFicticia_0123456789abcdefABCDEF';
+
+/**
+ * opts.registered: si la propiedad BT_SPREADSHEET_ID ya apunta a la hoja (por defecto sí, como tras "Preparar estructura").
+ * Por defecto no hay hoja activa, igual que en la aplicación web; state.active la simula para el menú vinculado.
+ */
+export function createGas(tabs: Record<string, unknown[][]>, opts: { secret?: string | null; codePath?: string; registered?: boolean } = {}) {
   const sheets = new Map(Object.entries(tabs).map(([name, values]) => [name, new FakeSheet(name, values)]));
   const cache = new Map<string, string>();
   const lock = { busy: false };
+  // returnsNull: openById devuelve null en vez de lanzar (por si Google lo hiciera así).
+  const state = { active: false, accessible: true, returnsNull: false, opened: [] as string[] };
   const props: Record<string, string | null> = { BT_SHARED_SECRET: opts.secret === undefined ? SECRET : opts.secret };
-  const ss = { getSheetByName: (n: string) => sheets.get(n) ?? null, insertSheet: (n: string) => sheets.set(n, new FakeSheet(n, [])).get(n) };
+  if (opts.registered !== false) props.BT_SPREADSHEET_ID = SHEET_ID;
+  const ss = {
+    getId: () => SHEET_ID,
+    getSheetByName: (n: string) => sheets.get(n) ?? null,
+    insertSheet: (n: string) => sheets.set(n, new FakeSheet(n, [])).get(n),
+  };
+  const openById = (id: string) => {
+    state.opened.push(id);
+    if (state.returnsNull) return null;
+    if (id !== SHEET_ID || !state.accessible) throw new Error(`No se encontró el documento con el ID ${id} (simulado).`);
+    return ss;
+  };
   const ctx: Record<string, unknown> = {
-    SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush: () => {}, getUi: () => ({ alert: () => {}, ButtonSet: { OK: 'OK' } }) },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => (state.active ? ss : null),
+      openById,
+      newDataValidation: () => validation,
+      flush: () => {},
+      getUi: () => ({ alert: () => {}, ButtonSet: { OK: 'OK' } }),
+    },
     LockService: { getScriptLock: () => ({ tryLock: () => !lock.busy, releaseLock: () => {} }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: (k: string) => props[k] ?? null, setProperty: (k: string, v: string) => void (props[k] = String(v)) }) },
     CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string) => void cache.set(k, v) }) },
@@ -139,7 +171,16 @@ export function createGas(tabs: Record<string, unknown[][]>, opts: { secret?: st
   const doPost = (body: string) => JSON.parse((ctx.doPost as (e: unknown) => { getContent(): string })({ postData: { contents: body } }).getContent());
   /** Funciones internas del script (menú y escritura) para probarlas directamente. */
   const fn = <T = unknown>(name: string, ...args: unknown[]) => (ctx[name] as (...a: unknown[]) => T)(...args);
-  return { ctx, ss, sheets, cache, lock, props, doPost, fn };
+  /** Función del menú, ejecutada como en la hoja (con hoja activa). */
+  const menu = <T = unknown>(name: string, ...args: unknown[]) => {
+    state.active = true;
+    try {
+      return fn<T>(name, ...args);
+    } finally {
+      state.active = false;
+    }
+  };
+  return { ctx, ss, sheets, cache, lock, props, state, doPost, fn, menu };
 }
 
 const resp = (status: number, body: string, headers: Record<string, string> = {}): FetchResponseLike => ({

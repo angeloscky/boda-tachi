@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   checkRoster,
   decideRsvp,
+  inReviewIssue,
   invitationBlockers,
+  invitationsInReview,
   parseInvitationRow,
   parsePersonRow,
   parseResponseRow,
   parseRsvpRequest,
+  rowIssues,
   summarize,
   toGuestView,
   type PersonRecord,
@@ -137,6 +140,68 @@ describe('reglas de confirmación (compartidas con Apps Script)', () => {
     expect(invitationBlockers(base.invitations[0], { ...base, responses: [resp('F1', 'sí')] })).toHaveLength(1);
     expect(invitationBlockers(base.invitations[0], { ...base, responses: [resp('F1', 'no asistirá'), resp('F1', 'no asistirá')] })).toHaveLength(1);
     expect(invitationBlockers(base.invitations[1], { ...base, responses: [resp('F1', 'sí')] })).toEqual([]);
+  });
+
+  it('respuesta escrita a mano con personas repetidas ("P1, P1" o "P1, p1"): error visible, no se atiende y no cuenta', () => {
+    const inv = parseInvitationRow({ id: 'INV-9', group: 'Familia Nueve', seats: '2', active: 'sí', token: '' });
+    const people = ['INV-9-P1', 'INV-9-P2'].map((id) => parsePersonRow({ id, invitationId: 'INV-9', name: id, active: 'sí' }));
+    for (const ids of ['INV-9-P1, INV-9-P1', 'INV-9-P1, inv-9-p1']) {
+      const resp = parseResponseRow({ invitationId: 'INV-9', personIds: ids, status: 'asistirá', revision: '1', updatedAt: 'x', requestId: 'a-mano-0001' });
+      expect(resp.errors.join(' '), ids).toMatch(/La respuesta repite a la persona INV-9-P1/i);
+      const rows = { invitations: [inv], people, responses: [resp] };
+      expect(invitationBlockers(inv, rows).join(' ')).toMatch(/repite/);
+      expect(rowIssues(rows).map((i) => `${i.tab} ${i.id}: ${i.message}`).join('\n')).toMatch(/Respuestas INV-9: La respuesta repite/);
+      // Aunque la fila llegara a las reglas, la revisión la marca y los totales no la cuentan.
+      const roster = checkRoster([inv.value], people.map((p) => p.value), [resp.value], { live: true });
+      expect(roster.map((i) => `${i.severity} ${i.message}`).join('\n')).toMatch(/error La respuesta repite/);
+      expect(summarize([inv.value], people.map((p) => p.value), [resp.value])).toMatchObject({ attending: 0, attendingPeople: 0, pending: 1 });
+    }
+    const ok = parseResponseRow({ invitationId: 'INV-9', personIds: 'INV-9-P1, INV-9-P2', status: 'asistirá', revision: '1', updatedAt: 'x', requestId: 'a-mano-0002' });
+    expect(ok.errors).toEqual([]);
+    expect(invitationBlockers(inv, { invitations: [inv], people, responses: [ok] })).toEqual([]);
+    expect(summarize([inv.value], people.map((p) => p.value), [ok.value])).toMatchObject({ attending: 1, attendingPeople: 2, pending: 0 });
+  });
+
+  it('respuesta a mano con una persona de otra invitación o con más personas que cupo: se pide revisar y no cuenta', () => {
+    const inv = parseInvitationRow({ id: 'INV-8', group: 'Familia Ocho', seats: '1', active: 'sí', token: '' });
+    const people = [
+      parsePersonRow({ id: 'INV-8-P1', invitationId: 'INV-8', name: 'Uno', active: 'sí' }),
+      parsePersonRow({ id: 'INV-8-P2', invitationId: 'INV-8', name: 'Dos', active: 'sí' }),
+      parsePersonRow({ id: 'INV-7-P1', invitationId: 'INV-7', name: 'Ajena', active: 'sí' }),
+    ];
+    for (const ids of ['INV-7-P1', 'INV-8-P1, INV-8-P2']) {
+      const resp = parseResponseRow({ invitationId: 'INV-8', personIds: ids, status: 'asistirá', revision: '1', updatedAt: 'x', requestId: 'a-mano-0003' });
+      expect(resp.errors).toEqual([]);
+      expect(invitationBlockers(inv, { invitations: [inv], people, responses: [resp] }).join(' '), ids).toMatch(/no pertenece|cupo de 1/);
+      expect(summarize([inv.value], people.map((p) => p.value), [resp.value])).toMatchObject({ attending: 0, pending: 1 });
+    }
+  });
+
+  it('una invitación en revisión (p. ej. una respuesta válida y otra repetida) se reporta y no cuenta en los totales', () => {
+    const inv = parseInvitationRow({ id: 'INV-9', group: 'Familia Nueve', seats: '2', active: 'sí', token: '' });
+    const people = ['INV-9-P1', 'INV-9-P2'].map((id) => parsePersonRow({ id, invitationId: 'INV-9', name: id, active: 'sí' }));
+    const row = (ids: string, revision: string) =>
+      parseResponseRow({ invitationId: 'INV-9', personIds: ids, status: 'asistirá', revision, updatedAt: 'x', requestId: `a-mano-000${revision}` });
+    for (const responses of [
+      [row('INV-9-P1', '1'), row('INV-9-P1, INV-9-P1', '2')], // la segunda fila es inválida y se descarta de los totales
+      [row('INV-9-P1', '1'), row('INV-9-P2', '2')], // dos filas válidas
+    ]) {
+      const rows = { invitations: [inv], people, responses };
+      const review = invitationsInReview(rows);
+      expect(review.map((r) => r.id)).toEqual(['INV-9']);
+      expect(inReviewIssue(review[0]).message).toMatch(/^En revisión: .*Hay más de una respuesta para esta invitación/);
+      const valid = responses.filter((r) => !r.errors.length).map((r) => r.value);
+      // Sin la marca, los totales contarían la fila válida; con ella, queda pendiente.
+      expect(summarize([inv.value], people.map((p) => p.value), valid).attending).toBe(1);
+      expect(summarize([inv.value], people.map((p) => p.value), valid, ['inv-9'])).toMatchObject({ attending: 0, attendingPeople: 0, pending: 1, inReview: 1 });
+    }
+    // Una invitación sin problemas o inactiva no queda en revisión.
+    expect(invitationsInReview({ invitations: [inv], people, responses: [row('INV-9-P1', '1')] })).toEqual([]);
+    const inactive = parseInvitationRow({ id: 'INV-9', group: 'Familia Nueve', seats: '2', active: 'no', token: '' });
+    expect(invitationsInReview({ invitations: [inactive], people, responses: [row('INV-9-P1, INV-9-P1', '1')] })).toEqual([]);
+    const demo = parseInvitationRow({ id: 'DEMO-009', group: 'Demo', seats: '2', active: 'sí', token: '' });
+    const demoResp = parseResponseRow({ invitationId: 'DEMO-009', personIds: 'DEMO-009-P1, DEMO-009-P1', status: 'asistirá', revision: '1', updatedAt: 'x', requestId: 'a-mano-0009' });
+    expect(invitationsInReview({ invitations: [demo], people: [], responses: [demoResp] })).toEqual([]);
   });
 
   it('respeta el cierre, el cupo pendiente y la invitación inactiva', () => {

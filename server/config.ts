@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 export interface AppConfig {
   port: number;
+  /** Interfaz donde escucha el servidor. Sin HOST, la de Node (todas las interfaces); en Render, 0.0.0.0. */
+  host: string | null;
   publicBaseUrl: string;
   dbPath: string;
   adminPasswordHash: string | null;
@@ -50,6 +52,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const publicBaseUrl = (env.PUBLIC_BASE_URL || `http://localhost:${env.PORT || 3000}`).replace(/\/+$/, '');
   const config: AppConfig = {
     port: Number(env.PORT || 3000),
+    host: env.HOST?.trim() || null,
     publicBaseUrl,
     dbPath: path.resolve(root, env.DB_PATH || 'data/demo.sqlite'),
     adminPasswordHash: env.ADMIN_PASSWORD_HASH || null,

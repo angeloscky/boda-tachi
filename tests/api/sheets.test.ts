@@ -6,14 +6,14 @@ import request from 'supertest';
 import { createApp } from '../../server/app.js';
 import { CONNECTOR_VERSION, signingString } from '../../shared/rsvp-rules.js';
 import { buildAppsScript } from '../../scripts/build-apps-script.js';
-import { SECRET, TOKEN_A, TOKEN_B, WEBAPP_URL, createGas, fakeWebApp, sampleTabs } from './fake-gas.js';
+import { SECRET, SHEET_ID, TOKEN_A, TOKEN_B, WEBAPP_URL, createGas, fakeWebApp, sampleTabs } from './fake-gas.js';
 
 const TOKEN_C = 'tokenFamiliaC_5555555555';
 import { adminAgent, rsvpBody, testConfig } from './helpers.js';
 
 /** Servidor en modo Google Sheets hablando con el Code.gs real a través del doble. */
-function sheetsApp(opts: { secret?: string; tamper?: (s: string) => string; mode?: 'ok' | 'login' | 'html'; tabs?: ReturnType<typeof sampleTabs> } = {}) {
-  const gas = createGas(opts.tabs ?? sampleTabs());
+function sheetsApp(opts: { secret?: string; tamper?: (s: string) => string; mode?: 'ok' | 'login' | 'html'; tabs?: ReturnType<typeof sampleTabs>; registered?: boolean } = {}) {
+  const gas = createGas(opts.tabs ?? sampleTabs(), { registered: opts.registered });
   const web = fakeWebApp(gas, { tamper: opts.tamper, mode: opts.mode });
   const app = createApp(null, testConfig('/tmp/no.sqlite', { rsvpBackend: 'sheets', sheets: { url: WEBAPP_URL, secret: opts.secret ?? SECRET, timeoutMs: 2000 } }), {
     fetchImpl: web.fetchImpl,
@@ -51,6 +51,73 @@ describe('conector de Google Sheets (Apps Script probado con dobles; sin conexi�
     expect(gas.doPost(JSON.stringify({ ...body, op: 'setValues' }))).toEqual({ ok: false, code: 'bad_request' });
     const noSecret = createGas(sampleTabs(), { secret: null });
     expect(noSecret.doPost(signedRequest('ping', {}))).toEqual({ ok: false, code: 'not_configured' });
+  });
+
+  it('como aplicación web (sin hoja activa) abre solo la hoja registrada; la solicitud no puede elegir otro archivo', async () => {
+    const { app, gas, responses } = sheetsApp();
+    expect((gas.ctx.SpreadsheetApp as { getActiveSpreadsheet: () => unknown }).getActiveSpreadsheet()).toBeNull();
+    expect((await request(app).get(`/api/invitations/${TOKEN_A}`)).status).toBe(200);
+    expect((await request(app).put(`/api/invitations/${TOKEN_A}/rsvp`).send(rsvpBody(['INV-001-P1']))).status).toBe(200);
+    expect(responses()).toHaveLength(1);
+    const admin = await adminAgent(app);
+    expect((await admin.get('/api/admin/backend')).body).toMatchObject({ mode: 'sheets', ready: true });
+    // Campos de más en la solicitud (otro archivo, un rango) se ignoran: el ID solo sale de las propiedades.
+    const ping = gas.doPost(signedRequest('ping', { spreadsheetId: 'OtraHojaAjena_0123456789abcdef', range: 'A1:Z999' }));
+    expect(JSON.parse(ping.data)).toMatchObject({ ok: true });
+    const get = gas.doPost(signedRequest('getInvitation', { token: TOKEN_A, spreadsheetId: 'OtraHojaAjena_0123456789abcdef' }));
+    expect(JSON.parse(get.data)).toMatchObject({ ok: true, result: { invitation: { group: 'Familia Ejemplo A' } } });
+    expect(new Set(gas.state.opened)).toEqual(new Set([SHEET_ID]));
+  });
+
+  it('sin hoja registrada o con la hoja inaccesible: error claro, el panel no dice "conectado" y nada se guarda', async () => {
+    for (const variant of ['sin registrar', 'inaccesible'] as const) {
+      const { app, gas, responses } = sheetsApp({ registered: variant === 'inaccesible' });
+      if (variant === 'inaccesible') gas.state.accessible = false;
+      const code = variant === 'inaccesible' ? 'sheet_unavailable' : 'sheet_not_configured';
+      expect(JSON.parse(gas.doPost(signedRequest('ping', {})).data)).toMatchObject({ ok: false, status: 503, code });
+      const get = await request(app).get(`/api/invitations/${TOKEN_A}`);
+      expect(get.status, variant).toBe(503);
+      expect(get.body.error).toBe('storage_unavailable');
+      const put = await request(app).put(`/api/invitations/${TOKEN_A}/rsvp`).send(rsvpBody(['INV-001-P1']));
+      expect(put.status).toBe(503);
+      expect(put.body.outcome).toBeUndefined();
+      expect(responses()).toEqual([]);
+      const admin = await adminAgent(app);
+      const status = (await admin.get('/api/admin/backend')).body;
+      expect(status).toMatchObject({ mode: 'sheets', ready: false });
+      expect(status.detail).toMatch(variant === 'inaccesible' ? /No se pudo abrir la hoja registrada/ : /no tiene registrada la hoja/);
+    }
+  });
+
+  it('ID registrado con espacios, con forma inválida, u openById que devuelve null', async () => {
+    const withSpaces = sheetsApp();
+    withSpaces.gas.props.BT_SPREADSHEET_ID = ` ${SHEET_ID} `;
+    expect((await request(withSpaces.app).get(`/api/invitations/${TOKEN_A}`)).status).toBe(200);
+
+    const pasted = sheetsApp();
+    pasted.gas.props.BT_SPREADSHEET_ID = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`;
+    expect(JSON.parse(pasted.gas.doPost(signedRequest('ping', {})).data)).toMatchObject({ ok: false, status: 503, code: 'sheet_not_configured', message: expect.stringMatching(/no es un ID de hoja válido/) });
+    expect(pasted.gas.state.opened).toEqual([]);
+
+    const nulled = sheetsApp();
+    nulled.gas.state.returnsNull = true;
+    for (const op of ['ping', 'summary'] as const) {
+      expect(JSON.parse(nulled.gas.doPost(signedRequest(op, {})).data), op).toMatchObject({ ok: false, status: 503, code: 'sheet_unavailable' });
+    }
+    expect((await request(nulled.app).put(`/api/invitations/${TOKEN_A}/rsvp`).send(rsvpBody(['INV-001-P1']))).status).toBe(503);
+    expect(nulled.responses()).toEqual([]);
+  });
+
+  it('"Preparar estructura" desde la hoja registra su ID y desde entonces la aplicación web la atiende', async () => {
+    const { app, gas } = sheetsApp({ registered: false });
+    expect((await request(app).get(`/api/invitations/${TOKEN_A}`)).status).toBe(503);
+    gas.menu('btSetup');
+    expect(gas.props.BT_SPREADSHEET_ID).toBe(SHEET_ID);
+    expect((await request(app).get(`/api/invitations/${TOKEN_A}`)).status).toBe(200);
+    // El menú no funciona fuera de la hoja (sin contexto activo): no registra nada por accidente.
+    const outside = createGas(sampleTabs(), { registered: false });
+    expect(() => outside.fn('btSetup')).toThrow();
+    expect(outside.props.BT_SPREADSHEET_ID).toBeUndefined();
   });
 
   it('la familia A solo recibe sus personas activas, sin teléfono ni notas, y no ve a B', async () => {
@@ -222,7 +289,7 @@ describe('conector de Google Sheets (Apps Script probado con dobles; sin conexi�
     expect(responses()).toEqual([['INV-001', 'INV-001-P2', 'asistirá', '3', expect.any(String), expect.any(String)]]);
     // Una respuesta capturada a mano también cuenta al revisar la lista.
     tab.values[1][3] = '7';
-    gas.fn('btCheck');
+    gas.menu('btCheck');
     tab.values = tab.values.slice(0, 1);
     expect((await request(app).get(`/api/invitations/${TOKEN_A}`)).body.revision).toBe(8);
   });
@@ -246,6 +313,60 @@ describe('conector de Google Sheets (Apps Script probado con dobles; sin conexi�
     expect(issues).toMatch(/INV-001: El teléfono "123" no es válido/);
     expect(issues).toMatch(/INV-001: El lado "tía" no es válido/);
     expect(status.summary).toMatchObject({ attending: 1 }); // la familia con un detalle menor sí cuenta
+  });
+
+  it('respuesta a mano con una persona repetida (sin distinguir mayúsculas): revisar, sin respuesta visible y fuera de los totales', async () => {
+    const tabs = sampleTabs();
+    tabs.Invitaciones[2][5] = 2; // INV-002 con cupo 2 y dos personas activas
+    tabs.Personas[6][3] = 'sí';
+    tabs.Respuestas.push(['INV-002', 'INV-002-P1, inv-002-p1', 'asistirá', '1', '2027-01-15T19:20:00-06:00', 'a-mano-0002']);
+    const { app, gas, responses } = sheetsApp({ tabs });
+    const get = await request(app).get(`/api/invitations/${TOKEN_B}`);
+    expect(get.status).toBe(409);
+    expect(get.body.error).toBe('needs_review');
+    expect(get.body.response).toBeUndefined();
+    expect((await request(app).put(`/api/invitations/${TOKEN_B}/rsvp`).send(rsvpBody(['INV-002-P1'], { expectedRevision: 1 }))).status).toBe(409);
+    expect(responses()).toEqual([['INV-002', 'INV-002-P1, inv-002-p1', 'asistirá', '1', expect.any(String), 'a-mano-0002']]); // no se corrige sola
+    const admin = await adminAgent(app);
+    const status = (await admin.get('/api/admin/backend')).body;
+    expect(status.summary).toMatchObject({ attending: 0, attendingPeople: 0, pending: 2 });
+    expect(status.issues.map((i: { tab: string; id: string; message: string }) => `${i.tab} ${i.id}: ${i.message}`).join('\n')).toMatch(
+      /Respuestas INV-002: La respuesta repite a la persona inv-002-p1/,
+    );
+    gas.fn('refreshSummary_', gas.ss);
+    const resumen = Object.fromEntries(gas.sheets.get('Resumen')!.values.filter((r) => r.length === 2));
+    expect(resumen).toMatchObject({ 'Invitaciones que asistirán': 0, 'Personas confirmadas': 0 });
+
+    // La misma respuesta sin repetir es válida y se cuenta.
+    const fixed = sampleTabs();
+    fixed.Invitaciones[2][5] = 2;
+    fixed.Personas[6][3] = 'sí';
+    fixed.Respuestas.push(['INV-002', 'INV-002-P1, INV-002-P2', 'asistirá', '1', '2027-01-15T19:20:00-06:00', 'a-mano-0003']);
+    const ok = sheetsApp({ tabs: fixed });
+    const view = await request(ok.app).get(`/api/invitations/${TOKEN_B}`);
+    expect(view.status).toBe(200);
+    expect(view.body.response).toMatchObject({ status: 'attending', attending: 2 });
+    const okAdmin = await adminAgent(ok.app);
+    expect((await okAdmin.get('/api/admin/backend')).body.summary).toMatchObject({ attending: 1, attendingPeople: 2 });
+  });
+
+  it('una respuesta válida del script y otra repetida a mano para la misma invitación: revisar, reportar y no contar', async () => {
+    const tabs = sampleTabs();
+    tabs.Respuestas.push(['INV-002', 'INV-002-P1', 'asistirá', '1', '2027-01-15T19:20:00-06:00', 'r-000000001']);
+    tabs.Respuestas.push(['INV-002', 'INV-002-P1, INV-002-P1', 'asistirá', '2', '2027-01-15T19:25:00-06:00', 'a-mano-0004']);
+    const { app, gas } = sheetsApp({ tabs });
+    const get = await request(app).get(`/api/invitations/${TOKEN_B}`);
+    expect(get.status).toBe(409);
+    expect(get.body.error).toBe('needs_review');
+    const admin = await adminAgent(app);
+    const status = (await admin.get('/api/admin/backend')).body;
+    expect(status.summary).toMatchObject({ attending: 0, attendingPeople: 0, pending: 2, inReview: 1 });
+    const issues = status.issues.map((i: { tab: string; id: string; message: string }) => `${i.tab} ${i.id}: ${i.message}`).join('\n');
+    expect(issues).toMatch(/Invitaciones INV-002: En revisión: .*Hay más de una respuesta para esta invitación/);
+    expect(issues).toMatch(/Respuestas INV-002: La respuesta repite a la persona INV-002-P1/);
+    gas.fn('refreshSummary_', gas.ss);
+    const resumen = Object.fromEntries(gas.sheets.get('Resumen')!.values.filter((r) => r.length === 2));
+    expect(resumen).toMatchObject({ 'Invitaciones que asistirán': 0, 'Personas confirmadas': 0, 'Invitaciones sin respuesta': 2, 'De ellas, en revisión (ver "Revisar la lista")': 1 });
   });
 
   it('la escritura no pisa una fila de Respuestas que cambió de lugar; el Resumen usa las reglas del servidor', async () => {
